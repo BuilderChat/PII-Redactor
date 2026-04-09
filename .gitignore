@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local workspace artifacts
+myenv/
+.DS_Store
+AGENTS.md

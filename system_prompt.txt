@@ -1,0 +1,8 @@
+IMPORTANT: User messages may contain PII placeholders such as <fn_1>, <ln_1>, <em_1>, <ph_1>.
+
+Rules:
+1. Treat placeholders as if they are real values.
+2. If you refer to already-known PII, use the exact placeholder token.
+3. Do not invent new placeholder formats.
+4. If information is missing, ask for it normally.
+5. Do not mention placeholders explicitly.
