@@ -79,4 +79,12 @@ def end_session(request: SessionEndRequest) -> SessionEndResponse:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", active_sessions=middleware.active_sessions)
+    detector_status = middleware.detector_status
+    return HealthResponse(
+        status="ok",
+        active_sessions=middleware.active_sessions,
+        presidio_enabled=bool(detector_status.get("presidio_enabled")),
+        gliner_enabled=bool(detector_status.get("gliner_enabled")),
+        name_detection_mode=str(detector_status.get("name_detection_mode", "heuristic")),
+        gliner_model=str(detector_status.get("gliner_model", "")),
+    )

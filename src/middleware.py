@@ -20,6 +20,10 @@ class PIIMiddleware:
         with self._lock:
             return len(self._vaults)
 
+    @property
+    def detector_status(self) -> dict[str, object]:
+        return dict(self.engine.runtime_info)
+
     def process_inbound(self, scope: ScopeContext, raw_user_message: str, new_user: bool = False) -> RedactionResult:
         vault = self._get_or_create_vault(scope)
         if new_user:

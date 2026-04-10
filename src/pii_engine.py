@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
-from .config import NAME_ENTITY_KEYS
+from .config import NAME_ENTITY_KEYS, get_settings
 from .pii_vault import PIIVault
 
+
+LOGGER = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_RE = re.compile(
@@ -30,6 +34,10 @@ NAME_NOISE_WORDS = {
     "contact",
     "is",
     "at",
+}
+PRESIDIO_ENTITY_MAP = {
+    "EMAIL_ADDRESS": "em",
+    "PHONE_NUMBER": "ph",
 }
 
 ALIAS_TO_ENTITY = {
@@ -83,13 +91,46 @@ class RehydrationResult:
 class PIIEngine:
     """PII detection/redaction with deterministic placeholder tokens.
 
-    Current bootstrap implementation uses:
-    - Regex for email/phone
-    - Heuristic detection for names
-
-    Presidio + GLiNER integration can be plugged in behind `_detect_name_spans`
-    without changing the public API.
+    Detection order:
+    1) Presidio for regex-style entities (email/phone) when available.
+    2) GLiNER for names when available.
+    3) Built-in regex + heuristics as resilient fallback.
     """
+
+    def __init__(
+        self,
+        use_presidio: bool | None = None,
+        use_gliner: bool | None = None,
+        gliner_model: str | None = None,
+        gliner_threshold: float | None = None,
+        gliner_labels: tuple[str, ...] | None = None,
+    ) -> None:
+        settings = get_settings()
+
+        self._use_presidio = settings.use_presidio if use_presidio is None else use_presidio
+        self._use_gliner = settings.use_gliner if use_gliner is None else use_gliner
+        self._gliner_model_name = settings.gliner_model if gliner_model is None else gliner_model
+        self._gliner_threshold = settings.gliner_threshold if gliner_threshold is None else gliner_threshold
+        self._gliner_labels = settings.gliner_labels if gliner_labels is None else gliner_labels
+
+        self._presidio_analyzer: Any | None = None
+        self._gliner_model_handle: Any | None = None
+        self._presidio_load_error: str | None = None
+        self._gliner_load_error: str | None = None
+
+        self._init_external_detectors()
+
+    @property
+    def runtime_info(self) -> dict[str, Any]:
+        return {
+            "presidio_enabled": self._presidio_analyzer is not None,
+            "gliner_enabled": self._gliner_model_handle is not None,
+            "name_detection_mode": "gliner" if self._gliner_model_handle is not None else "heuristic",
+            "gliner_model": self._gliner_model_name,
+            "gliner_threshold": self._gliner_threshold,
+            "presidio_load_error": self._presidio_load_error,
+            "gliner_load_error": self._gliner_load_error,
+        }
 
     def redact(self, text: str, vault: PIIVault) -> RedactionResult:
         spans = self._collect_spans(text)
@@ -174,7 +215,46 @@ class PIIEngine:
 
         return TOKEN_RE.sub(_replace, text)
 
+    def _init_external_detectors(self) -> None:
+        if self._use_presidio:
+            self._init_presidio()
+        if self._use_gliner:
+            self._init_gliner()
+
+    def _init_presidio(self) -> None:
+        try:
+            from presidio_analyzer import AnalyzerEngine
+
+            self._presidio_analyzer = AnalyzerEngine()
+        except Exception as exc:  # pragma: no cover - depends on runtime deps
+            self._presidio_analyzer = None
+            self._presidio_load_error = str(exc)
+            LOGGER.info("Presidio unavailable; using regex fallback: %s", exc)
+
+    def _init_gliner(self) -> None:
+        try:
+            from gliner import GLiNER
+
+            self._gliner_model_handle = GLiNER.from_pretrained(self._gliner_model_name)
+        except Exception as exc:  # pragma: no cover - depends on runtime deps
+            self._gliner_model_handle = None
+            self._gliner_load_error = str(exc)
+            LOGGER.info("GLiNER unavailable; using heuristic name detection: %s", exc)
+
     def _collect_spans(self, text: str) -> list[Span]:
+        spans: list[Span] = []
+        spans.extend(self._detect_email_phone_spans_presidio(text))
+        spans.extend(self._detect_email_phone_spans_regex(text))
+
+        name_spans = self._detect_name_spans_gliner(text)
+        if name_spans:
+            spans.extend(name_spans)
+        else:
+            spans.extend(self._detect_name_spans_heuristic(text))
+
+        return spans
+
+    def _detect_email_phone_spans_regex(self, text: str) -> list[Span]:
         spans: list[Span] = []
 
         for match in EMAIL_RE.finditer(text):
@@ -183,10 +263,86 @@ class PIIEngine:
         for match in PHONE_RE.finditer(text):
             spans.append(Span(match.start(), match.end(), "ph", match.group(0)))
 
-        spans.extend(self._detect_name_spans(text))
         return spans
 
-    def _detect_name_spans(self, text: str) -> list[Span]:
+    def _detect_email_phone_spans_presidio(self, text: str) -> list[Span]:
+        if self._presidio_analyzer is None:
+            return []
+
+        try:
+            results = self._presidio_analyzer.analyze(
+                text=text,
+                entities=tuple(PRESIDIO_ENTITY_MAP.keys()),
+                language="en",
+            )
+        except Exception as exc:  # pragma: no cover - depends on runtime deps
+            LOGGER.info("Presidio analyze failed; regex fallback remains active: %s", exc)
+            return []
+
+        spans: list[Span] = []
+        for result in results:
+            entity_type = getattr(result, "entity_type", "")
+            entity_key = PRESIDIO_ENTITY_MAP.get(entity_type)
+            if not entity_key:
+                continue
+
+            start = int(getattr(result, "start", -1))
+            end = int(getattr(result, "end", -1))
+            if start < 0 or end <= start or end > len(text):
+                continue
+
+            spans.append(Span(start=start, end=end, entity_key=entity_key, value=text[start:end]))
+
+        return spans
+
+    def _detect_name_spans_gliner(self, text: str) -> list[Span]:
+        if self._gliner_model_handle is None:
+            return []
+
+        try:
+            predictions = self._gliner_model_handle.predict_entities(
+                text,
+                labels=list(self._gliner_labels),
+                threshold=self._gliner_threshold,
+            )
+        except TypeError:
+            predictions = self._gliner_model_handle.predict_entities(text, labels=list(self._gliner_labels))
+        except Exception as exc:  # pragma: no cover - depends on runtime deps
+            LOGGER.info("GLiNER predict failed; heuristic fallback remains active: %s", exc)
+            return []
+
+        spans: list[Span] = []
+        for prediction in predictions or []:
+            label = str(self._prediction_field(prediction, "label") or "").lower()
+            if not self._is_name_label(label):
+                continue
+
+            start = self._prediction_field(prediction, "start")
+            end = self._prediction_field(prediction, "end")
+
+            if start is None or end is None:
+                text_chunk = str(self._prediction_field(prediction, "text") or "")
+                located = self._locate_text_span(text, text_chunk, spans)
+                if not located:
+                    continue
+                start, end = located
+
+            try:
+                start_i = int(start)
+                end_i = int(end)
+            except (TypeError, ValueError):
+                continue
+
+            if start_i < 0 or end_i <= start_i or end_i > len(text):
+                continue
+
+            value, keep_chars = self._trim_trailing_name_noise(text[start_i:end_i])
+            if self._looks_like_name(value):
+                spans.append(Span(start_i, start_i + keep_chars, "name", value))
+
+        return spans
+
+    def _detect_name_spans_heuristic(self, text: str) -> list[Span]:
         spans: list[Span] = []
 
         for match in NAME_INTRO_RE.finditer(text):
@@ -202,6 +358,36 @@ class PIIEngine:
                 spans.append(Span(start, end, "name", clean))
 
         return spans
+
+    @staticmethod
+    def _prediction_field(prediction: Any, key: str) -> Any:
+        if isinstance(prediction, dict):
+            return prediction.get(key)
+        return getattr(prediction, key, None)
+
+    @staticmethod
+    def _is_name_label(label: str) -> bool:
+        if not label:
+            return False
+        return "name" in label or "person" in label
+
+    @staticmethod
+    def _locate_text_span(text: str, chunk: str, existing_spans: list[Span]) -> tuple[int, int] | None:
+        if not chunk:
+            return None
+
+        search_start = 0
+        while True:
+            idx = text.find(chunk, search_start)
+            if idx < 0:
+                return None
+
+            end = idx + len(chunk)
+            has_overlap = any(max(idx, span.start) < min(end, span.end) for span in existing_spans)
+            if not has_overlap:
+                return idx, end
+
+            search_start = idx + 1
 
     @staticmethod
     def _looks_like_name(value: str) -> bool:

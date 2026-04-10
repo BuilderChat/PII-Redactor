@@ -52,3 +52,7 @@ class SessionEndResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     active_sessions: int
+    presidio_enabled: bool
+    gliner_enabled: bool
+    name_detection_mode: str
+    gliner_model: str

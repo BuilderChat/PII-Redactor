@@ -11,6 +11,7 @@ This service redacts PII before text reaches an LLM, then rehydrates placeholder
 - Isolation key: `session_id + visitor_id + client_id + assistant_id`
 - API surface: REST only (`/redact`, `/rehydrate`, `/session/end`, `/health`)
 - Security: API key (raw or SHA-256 hash verification)
+- Detection backend: Presidio + GLiNER (automatic fallback to regex/heuristics)
 
 ## Token Policy
 
@@ -58,4 +59,5 @@ If cross-process/session recovery is required, add encrypted persistence behind 
 ## Notes
 
 - `PII-redactor-plan.v2.md` is preserved as the planning reference.
-- Presidio/GLiNER integration points are scaffolded; fallback regex/heuristics are implemented for first-pass behavior.
+- Runtime health endpoint includes detector status so you can verify if Presidio/GLiNER loaded.
+- If Presidio/GLiNER dependencies or models are unavailable, the engine falls back automatically to regex/heuristics.
