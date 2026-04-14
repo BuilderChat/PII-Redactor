@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from .config import get_settings
 from .middleware import PIIMiddleware
+from .persistence import PersistenceConfigError, build_vault_store
 from .schemas import (
     HealthResponse,
     RedactRequest,
@@ -18,7 +19,12 @@ from .schemas import (
 )
 
 settings = get_settings()
-middleware = PIIMiddleware()
+try:
+    vault_store, persistence_mode = build_vault_store(settings)
+except PersistenceConfigError as exc:
+    raise RuntimeError(f"Invalid persistence configuration: {exc}") from exc
+
+middleware = PIIMiddleware(vault_store=vault_store, persistence_mode=persistence_mode)
 app = FastAPI(title="PII Redactor", version="0.1.0")
 
 
@@ -46,23 +52,55 @@ def _validate_api_key(x_api_key: str | None = Header(default=None)) -> None:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
 
-@app.post("/redact", response_model=RedactResponse, dependencies=[Depends(_validate_api_key)])
+@app.post(
+    "/redact",
+    response_model=RedactResponse,
+    response_model_exclude_none=True,
+    dependencies=[Depends(_validate_api_key)],
+)
 def redact(request: RedactRequest) -> RedactResponse:
-    result = middleware.process_inbound(
-        scope=request.to_scope(),
-        raw_user_message=request.message,
-        new_user=request.new_user,
+    fail_closed = request.fail_closed(settings.fail_closed_default)
+    try:
+        result = middleware.process_inbound(
+            scope=request.to_scope(),
+            raw_user_message=request.message,
+            new_user=request.new_user,
+            previous_assistant_message=request.previous_assistant_message,
+            non_name_allowlist=request.non_name_allowlist,
+            fail_closed=fail_closed,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redaction service unavailable",
+        ) from exc
+
+    replacements = (
+        dict(result.replacements)
+        if request.include_replacements and settings.allow_raw_replacements
+        else None
     )
     return RedactResponse(
         redacted=result.redacted_text,
         active_user_index=result.active_profile,
-        replacements=result.replacements,
+        replacements=replacements,
     )
 
 
 @app.post("/rehydrate", response_model=RehydrateResponse, dependencies=[Depends(_validate_api_key)])
 def rehydrate(request: RehydrateRequest) -> RehydrateResponse:
-    result = middleware.process_outbound(scope=request.to_scope(), llm_response=request.message)
+    fail_closed = request.fail_closed(settings.fail_closed_default)
+    try:
+        result = middleware.process_outbound(
+            scope=request.to_scope(),
+            llm_response=request.message,
+            fail_closed=fail_closed,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rehydrate service unavailable",
+        ) from exc
     return RehydrateResponse(
         clean=result.clean_text,
         repaired_text=result.repaired_text,
@@ -72,7 +110,13 @@ def rehydrate(request: RehydrateRequest) -> RehydrateResponse:
 
 @app.post("/session/end", response_model=SessionEndResponse, dependencies=[Depends(_validate_api_key)])
 def end_session(request: SessionEndRequest) -> SessionEndResponse:
-    ended = middleware.end_session(scope=request.to_scope())
+    try:
+        ended = middleware.end_session(scope=request.to_scope(), fail_closed=settings.fail_closed_default)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Session cleanup unavailable",
+        ) from exc
     status_text = "vault_destroyed" if ended else "session_not_found"
     return SessionEndResponse(status=status_text)
 
@@ -87,4 +131,10 @@ def health() -> HealthResponse:
         gliner_enabled=bool(detector_status.get("gliner_enabled")),
         name_detection_mode=str(detector_status.get("name_detection_mode", "heuristic")),
         gliner_model=str(detector_status.get("gliner_model", "")),
+        persistence_enabled=bool(detector_status.get("persistence_enabled")),
+        persistence_mode=str(detector_status.get("persistence_mode", "none")),
+        persistence_healthy=bool(detector_status.get("persistence_healthy")),
+        persistence_queue_depth=int(detector_status.get("persistence_queue_depth", 0)),
+        scope_ttl_seconds=int(detector_status.get("scope_ttl_seconds", 0)),
+        max_active_scopes=int(detector_status.get("max_active_scopes", 0)),
     )

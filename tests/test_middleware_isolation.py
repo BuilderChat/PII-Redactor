@@ -6,8 +6,8 @@ from src.types import ScopeContext
 def test_scope_isolation_across_sessions() -> None:
     middleware = PIIMiddleware()
 
-    scope_a = ScopeContext("s1", "v1", "c1", "a1")
-    scope_b = ScopeContext("s1", "v2", "c1", "a1")
+    scope_a = ScopeContext(thread_id="thread_a", session_id="s1", visitor_id="v1", client_id="c1", assistant_id="a1")
+    scope_b = ScopeContext(thread_id="thread_b", session_id="s1", visitor_id="v2", client_id="c1", assistant_id="a1")
 
     inbound_a = middleware.process_inbound(scope_a, "My name is Alice Jones")
     inbound_b = middleware.process_inbound(scope_b, "My name is Bob Stone")

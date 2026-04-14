@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Local sensitive files or non-needed for commit
+tests/fixtures/private/
+deferred_list.md
+
 # Distribution / packaging
 .Python
 build/
