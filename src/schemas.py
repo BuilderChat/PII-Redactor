@@ -127,6 +127,8 @@ class HealthResponse(BaseModel):
     active_sessions: int
     presidio_enabled: bool
     gliner_enabled: bool
+    require_gliner: bool
+    require_presidio: bool
     name_detection_mode: str
     gliner_model: str
     persistence_enabled: bool

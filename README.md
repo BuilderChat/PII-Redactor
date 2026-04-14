@@ -13,13 +13,18 @@ This service redacts PII before text reaches an LLM, then rehydrates placeholder
 - Security: API key (raw or SHA-256 hash verification)
 - Detection backend: Presidio + GLiNER (automatic fallback to regex/heuristics)
 - Default failure policy: fail-closed (per-request override available)
+- Air-gap defaults:
+  - `PII_REDACTOR_GLINER_ALLOW_REMOTE_DOWNLOAD=false` (local model cache only)
+  - `PII_REDACTOR_PRESIDIO_MINIMAL_RECOGNIZERS=true` (email/phone recognizers only)
+  - `PII_REDACTOR_REQUIRE_GLINER` / `PII_REDACTOR_REQUIRE_PRESIDIO` available for startup fail-fast
 
 ## Token Policy
 
 - Tokens are scoped per isolated chat context.
-- Per context, active user index starts at `1`.
-- Sending `new_user=true` on `/redact` advances index (`*_1 -> *_2 -> *_3`).
-- If a value is corrected (e.g., spelling fix), the same token for that active index is overwritten.
+- Numeric suffixes increment per entity as new distinct values are seen in scope (`<fn_1>`, `<fn_2>`, ...).
+- Existing tokens are not overwritten by later distinct values.
+- Re-registering the same normalized value reuses its original token.
+- `new_user=true` still advances `active_user_index` for flow tracking.
 
 ## Quick Start
 
@@ -60,6 +65,12 @@ If you see `{"detail":"Server is missing API key configuration"}`:
 - Ensure `.env` contains either `PII_REDACTOR_API_KEY` or `PII_REDACTOR_API_KEY_SHA256`.
 - Restart `uvicorn` after editing `.env`.
 - Keep `PII_REDACTOR_REQUIRE_API_KEY=true` for normal operation.
+
+## Build Image Guide
+
+If you are embedding this into another app image or running strict offline in Docker, use:
+
+- [`docs/BUILD_IMAGE_GUIDE.md`](docs/BUILD_IMAGE_GUIDE.md)
 
 ## Integration Guide
 
@@ -275,4 +286,8 @@ PII_REDACTOR_PERSISTENCE_KEY_VERSION=v1
 
 - `PII-redactor-plan.v2.md` is preserved as the planning reference.
 - Runtime health endpoint includes detector status so you can verify if Presidio/GLiNER loaded.
-- If Presidio/GLiNER dependencies or models are unavailable, the engine falls back automatically to regex/heuristics.
+- If Presidio/GLiNER dependencies or models are unavailable and `PII_REDACTOR_REQUIRE_*` flags are `false`, the engine falls back to regex/heuristics.
+- If `PII_REDACTOR_REQUIRE_GLINER=true` or `PII_REDACTOR_REQUIRE_PRESIDIO=true`, startup fails if the required detector is unavailable.
+- For strict air-gap mode, keep:
+  - `PII_REDACTOR_GLINER_ALLOW_REMOTE_DOWNLOAD=false`
+  - `PII_REDACTOR_PRESIDIO_MINIMAL_RECOGNIZERS=true`

@@ -12,9 +12,15 @@
 - `src/schemas.py`: API request/response contracts.
 - `src/types.py`: Shared typed scope model.
 
+## Documentation
+
+- `README.md`: Setup, API usage, persistence modes, integration flow.
+- `docs/BUILD_IMAGE_GUIDE.md`: Docker build/run instructions for strict offline packaging and embedding in another app image.
+
 ## Tests
 
 - `tests/test_allowlist_cache.py`: Allowlist selector extraction, cache rewrite behavior, middleware merge behavior.
+- `tests/test_engine_airgap.py`: Air-gap detector initialization guarantees (GLiNER local-only by default).
 - `tests/test_server_auth.py`: API key guard behavior.
 - `tests/test_persistence_selector.py`: Persistence mode/build validation.
 - `tests/test_schemas_contract.py`: Request schema validation and behavior.

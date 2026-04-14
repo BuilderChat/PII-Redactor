@@ -40,6 +40,27 @@ middleware = PIIMiddleware(
     persistence_mode=persistence_mode,
     allowlist_cache=allowlist_cache,
 )
+
+detector_status = middleware.detector_status
+if settings.require_gliner:
+    if not settings.use_gliner:
+        raise RuntimeError(
+            "Invalid detector configuration: PII_REDACTOR_REQUIRE_GLINER=true "
+            "requires PII_REDACTOR_USE_GLINER=true"
+        )
+    if not bool(detector_status.get("gliner_enabled")):
+        detail = str(detector_status.get("gliner_load_error") or "unknown error")
+        raise RuntimeError(f"GLiNER required but unavailable at startup: {detail}")
+if settings.require_presidio:
+    if not settings.use_presidio:
+        raise RuntimeError(
+            "Invalid detector configuration: PII_REDACTOR_REQUIRE_PRESIDIO=true "
+            "requires PII_REDACTOR_USE_PRESIDIO=true"
+        )
+    if not bool(detector_status.get("presidio_enabled")):
+        detail = str(detector_status.get("presidio_load_error") or "unknown error")
+        raise RuntimeError(f"Presidio required but unavailable at startup: {detail}")
+
 app = FastAPI(title="PII Redactor", version="0.1.0")
 
 
@@ -189,6 +210,8 @@ def health() -> HealthResponse:
         active_sessions=middleware.active_sessions,
         presidio_enabled=bool(detector_status.get("presidio_enabled")),
         gliner_enabled=bool(detector_status.get("gliner_enabled")),
+        require_gliner=bool(settings.require_gliner),
+        require_presidio=bool(settings.require_presidio),
         name_detection_mode=str(detector_status.get("name_detection_mode", "heuristic")),
         gliner_model=str(detector_status.get("gliner_model", "")),
         persistence_enabled=bool(detector_status.get("persistence_enabled")),

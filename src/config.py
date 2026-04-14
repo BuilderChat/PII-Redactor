@@ -23,7 +23,11 @@ class Settings:
     allow_raw_replacements: bool
     log_level: str
     use_presidio: bool
+    presidio_minimal_recognizers: bool
+    require_presidio: bool
     use_gliner: bool
+    gliner_allow_remote_download: bool
+    require_gliner: bool
     gliner_model: str
     gliner_threshold: float
     gliner_labels: tuple[str, ...]
@@ -103,7 +107,11 @@ def get_settings() -> Settings:
         allow_raw_replacements=_env_bool("PII_REDACTOR_ALLOW_RAW_REPLACEMENTS", False),
         log_level=os.getenv("PII_REDACTOR_LOG_LEVEL", "INFO"),
         use_presidio=_env_bool("PII_REDACTOR_USE_PRESIDIO", True),
+        presidio_minimal_recognizers=_env_bool("PII_REDACTOR_PRESIDIO_MINIMAL_RECOGNIZERS", True),
+        require_presidio=_env_bool("PII_REDACTOR_REQUIRE_PRESIDIO", False),
         use_gliner=_env_bool("PII_REDACTOR_USE_GLINER", True),
+        gliner_allow_remote_download=_env_bool("PII_REDACTOR_GLINER_ALLOW_REMOTE_DOWNLOAD", False),
+        require_gliner=_env_bool("PII_REDACTOR_REQUIRE_GLINER", False),
         gliner_model=os.getenv("PII_REDACTOR_GLINER_MODEL", "urchade/gliner_multi_pii-v1"),
         gliner_threshold=_env_float("PII_REDACTOR_GLINER_THRESHOLD", 0.75),
         gliner_labels=_env_csv(

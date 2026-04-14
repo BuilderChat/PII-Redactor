@@ -661,6 +661,7 @@ class Span:
     end: int
     entity_key: str
     value: str
+    prefer_latest: bool = False
 
 
 @dataclass(frozen=True)
@@ -697,7 +698,9 @@ class PIIEngine:
         settings = get_settings()
 
         self._use_presidio = settings.use_presidio if use_presidio is None else use_presidio
+        self._presidio_minimal_recognizers = settings.presidio_minimal_recognizers
         self._use_gliner = settings.use_gliner if use_gliner is None else use_gliner
+        self._gliner_allow_remote_download = settings.gliner_allow_remote_download
         self._gliner_model_name = settings.gliner_model if gliner_model is None else gliner_model
         self._gliner_threshold = settings.gliner_threshold if gliner_threshold is None else gliner_threshold
         self._gliner_labels = settings.gliner_labels if gliner_labels is None else gliner_labels
@@ -721,6 +724,7 @@ class PIIEngine:
             "name_detection_mode": "gliner" if self._gliner_model_handle is not None else "heuristic",
             "gliner_model": self._gliner_model_name,
             "gliner_threshold": self._gliner_threshold,
+            "gliner_allow_remote_download": self._gliner_allow_remote_download,
             "presidio_load_error": self._presidio_load_error,
             "gliner_load_error": self._gliner_load_error,
         }
@@ -829,6 +833,7 @@ class PIIEngine:
         try:
             from presidio_analyzer import AnalyzerEngine, RecognizerRegistry
             from presidio_analyzer.nlp_engine import NlpEngineProvider
+            from presidio_analyzer.predefined_recognizers import EmailRecognizer, PhoneRecognizer
 
             configuration = {
                 "nlp_engine_name": "spacy",
@@ -837,8 +842,14 @@ class PIIEngine:
             provider = NlpEngineProvider(nlp_configuration=configuration)
             nlp_engine = provider.create_engine()
 
-            registry = RecognizerRegistry()
-            registry.load_predefined_recognizers()
+            registry = RecognizerRegistry(supported_languages=["en"])
+            if self._presidio_minimal_recognizers:
+                # Strict air-gap: register only entities we actually need (email/phone),
+                # avoiding URL/tldextract refresh behavior from broader recognizer sets.
+                registry.add_recognizer(EmailRecognizer(supported_language="en"))
+                registry.add_recognizer(PhoneRecognizer(supported_language="en"))
+            else:
+                registry.load_predefined_recognizers()
 
             self._presidio_analyzer = AnalyzerEngine(
                 nlp_engine=nlp_engine,
@@ -854,14 +865,10 @@ class PIIEngine:
         try:
             from gliner import GLiNER
 
-            try:
-                self._gliner_model_handle = GLiNER.from_pretrained(
-                    self._gliner_model_name,
-                    local_files_only=True,
-                )
-            except Exception:
-                # Fallback to online resolution when local cache is missing.
-                self._gliner_model_handle = GLiNER.from_pretrained(self._gliner_model_name)
+            self._gliner_model_handle = GLiNER.from_pretrained(
+                self._gliner_model_name,
+                local_files_only=not self._gliner_allow_remote_download,
+            )
         except Exception as exc:  # pragma: no cover - depends on runtime deps
             self._gliner_model_handle = None
             self._gliner_load_error = str(exc)
@@ -1206,7 +1213,15 @@ class PIIEngine:
                         return [Span(two_part_match.start(2), two_part_match.end(2), "ln", second)]
                     if tail_after_second_normalized.startswith(("my full name", "full name", "my name")):
                         full_value = f"{first} {second}"
-                        return [Span(two_part_match.start(1), two_part_match.end(2), "name", full_value)]
+                        return [
+                            Span(
+                                two_part_match.start(1),
+                                two_part_match.end(2),
+                                "name",
+                                full_value,
+                                prefer_latest=True,
+                            )
+                        ]
 
             if known_first:
                 known_first_pattern = re.compile(
@@ -1576,7 +1591,7 @@ class PIIEngine:
                 and self._normalize_text_phrase(candidate) not in non_name_terms
                 and self._is_similar_name_token(self._normalize_text_phrase(candidate), self._normalize_text_phrase(known_last))
             ):
-                return [Span(one_word_match.start(1), one_word_match.end(1), "ln", candidate)]
+                return [Span(one_word_match.start(1), one_word_match.end(1), "ln", candidate, prefer_latest=True)]
 
         match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b", text, flags=re.UNICODE)
         if not match:
@@ -1613,7 +1628,7 @@ class PIIEngine:
         ):
             return []
 
-        return [Span(match.start(2), match.end(2), "ln", second)]
+        return [Span(match.start(2), match.end(2), "ln", second, prefer_latest=True)]
 
     def _detect_name_labelled_reply_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
         for pattern in (NAME_LABELLED_REPLY_RE, NAME_LABELLED_REPLY_ALT_RE, LAST_NAME_LABELLED_REPLY_SPACE_RE):
@@ -2500,13 +2515,13 @@ class PIIEngine:
             for entity in NAME_ENTITY_KEYS:
                 value = name_parts.get(entity)
                 if value:
-                    token = vault.register(entity, value)
+                    token = vault.register(entity, value, prefer_latest=span.prefer_latest)
                     ordered_tokens.append(token)
                     replacements[token] = value
 
             return " ".join(ordered_tokens), replacements
 
-        token = vault.register(span.entity_key, span.value)
+        token = vault.register(span.entity_key, span.value, prefer_latest=span.prefer_latest)
         return token, {token: span.value}
 
     @staticmethod
