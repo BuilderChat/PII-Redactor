@@ -2,7 +2,7 @@ fastapi==0.116.1
 uvicorn[standard]==0.35.0
 pydantic==2.11.7
 python-dotenv==1.1.1
-cryptography==45.0.7
+cryptography>=43,<44.1
 
 # PII detection stack
 presidio-analyzer==2.2.360

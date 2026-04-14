@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 
 ENTITY_KEYS = ("fn", "mn1", "mn2", "ln", "em", "ph")
 NAME_ENTITY_KEYS = ("fn", "mn1", "mn2", "ln")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DOTENV_LOADED = False
 
 
 @dataclass(frozen=True)
@@ -73,7 +79,19 @@ def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return parsed or default
 
 
+def _load_dotenv_once() -> None:
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+    running_under_pytest = "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST") is not None
+    default_load_dotenv = not running_under_pytest
+    if _env_bool("PII_REDACTOR_LOAD_DOTENV", default_load_dotenv):
+        load_dotenv(_REPO_ROOT / ".env", override=False)
+    _DOTENV_LOADED = True
+
+
 def get_settings() -> Settings:
+    _load_dotenv_once()
     return Settings(
         api_key=os.getenv("PII_REDACTOR_API_KEY", ""),
         api_key_sha256=os.getenv("PII_REDACTOR_API_KEY_SHA256", "").lower(),

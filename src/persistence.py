@@ -155,6 +155,11 @@ class SupabaseVaultStore:
 
         if not supabase_url:
             raise PersistenceConfigError("PII_REDACTOR_SUPABASE_URL is required for internal supabase mode")
+        parsed_url = urlparse.urlparse(supabase_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise PersistenceConfigError(
+                "PII_REDACTOR_SUPABASE_URL must be an HTTP(S) Supabase project URL (e.g. https://<project>.supabase.co)"
+            )
         if not service_role_key:
             raise PersistenceConfigError(
                 "PII_REDACTOR_SUPABASE_SERVICE_ROLE_KEY is required for internal supabase mode"

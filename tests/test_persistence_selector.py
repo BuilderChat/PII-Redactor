@@ -79,6 +79,23 @@ def test_internal_supabase_mode_requires_credentials() -> None:
     raise AssertionError("Expected PersistenceConfigError")
 
 
+def test_internal_supabase_mode_rejects_postgres_connection_url() -> None:
+    try:
+        build_vault_store(
+            _settings(
+                persistence_mode="internal",
+                internal_store_impl="supabase",
+                require_persistence=True,
+                supabase_url="postgresql://user:pass@host:5432/db",
+                supabase_service_role_key="service_role",
+                persistence_master_key="master_key",
+            )
+        )
+    except PersistenceConfigError:
+        return
+    raise AssertionError("Expected PersistenceConfigError for invalid Supabase URL scheme")
+
+
 def test_external_mode_uses_injected_store() -> None:
     injected = MemoryVaultStore()
     store, mode = build_vault_store(_settings(persistence_mode="external"), external_store=injected)

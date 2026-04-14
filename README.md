@@ -31,6 +31,11 @@ cp .env.example .env
 uvicorn src.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+Notes:
+
+- Start the server from repo root so `.env` is auto-loaded.
+- If your runtime already injects environment variables, set `PII_REDACTOR_LOAD_DOTENV=false`.
+
 ## Example
 
 ```bash
@@ -49,6 +54,12 @@ curl -X POST http://localhost:8000/redact \
     "failure_mode": "closed"
   }'
 ```
+
+If you see `{"detail":"Server is missing API key configuration"}`:
+
+- Ensure `.env` contains either `PII_REDACTOR_API_KEY` or `PII_REDACTOR_API_KEY_SHA256`.
+- Restart `uvicorn` after editing `.env`.
+- Keep `PII_REDACTOR_REQUIRE_API_KEY=true` for normal operation.
 
 ## Integration Guide
 
