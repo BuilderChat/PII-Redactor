@@ -36,6 +36,9 @@ def _settings(**overrides: object) -> Settings:
         supabase_service_role_key="",
         supabase_table="pii_vault_snapshots",
         persistence_master_key="",
+        allowlist_cache_enabled=True,
+        allowlist_cache_dir=".cache/non_name_allowlists",
+        allowlist_cache_max_terms=50000,
     )
     return replace(base, **overrides)
 

@@ -7,6 +7,7 @@ from queue import Empty, Full, Queue
 from threading import Event, RLock, Thread
 import time
 
+from .allowlist_cache import LocalAllowlistCache
 from .config import get_settings
 from .persistence import VaultStore
 from .pii_engine import PIIEngine, RedactionResult, RehydrationResult
@@ -127,6 +128,7 @@ class PIIMiddleware:
         persistence_queue_max: int | None = None,
         persistence_block_on_error: bool | None = None,
         persistence_key_version: str | None = None,
+        allowlist_cache: LocalAllowlistCache | None = None,
     ) -> None:
         settings = get_settings()
         self.engine = engine or PIIEngine()
@@ -152,6 +154,7 @@ class PIIMiddleware:
         )
         queue_max = settings.persistence_queue_max if persistence_queue_max is None else max(1, int(persistence_queue_max))
         self._writer = _AsyncPersistenceWriter(vault_store, max_queue_size=queue_max) if vault_store else None
+        self._allowlist_cache = allowlist_cache
 
     @property
     def active_sessions(self) -> int:
@@ -172,6 +175,7 @@ class PIIMiddleware:
                 "persistence_queue_depth": self._writer.queue_depth if self._writer is not None else 0,
                 "scope_ttl_seconds": self._vault_ttl_seconds,
                 "max_active_scopes": self._max_active_scopes,
+                "allowlist_cache_enabled": self._allowlist_cache is not None,
             }
         )
         return status
@@ -191,11 +195,18 @@ class PIIMiddleware:
             vault = self._get_or_create_vault(scope, fail_closed=fail_closed)
             if new_user:
                 vault.advance_profile()
+            combined_allowlist = list(non_name_allowlist or ())
+            if self._allowlist_cache is not None:
+                cached_terms = self._allowlist_cache.get(scope.client_id, scope.assistant_id)
+                if cached_terms:
+                    merged = set(combined_allowlist)
+                    merged.update(cached_terms)
+                    combined_allowlist = sorted(merged)
             result = self.engine.redact(
                 raw_user_message,
                 vault,
                 previous_assistant_message=previous_assistant_message,
-                non_name_allowlist=non_name_allowlist,
+                non_name_allowlist=combined_allowlist,
             )
             self._persist_snapshot(scope, vault, fail_closed=fail_closed)
             LOGGER.info(

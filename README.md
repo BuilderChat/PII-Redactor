@@ -9,7 +9,7 @@ This service redacts PII before text reaches an LLM, then rehydrates placeholder
 - Mandatory entities: names, email, phone
 - Token format: `<fn_#>`, `<mn1_#>`, `<mn2_#>`, `<ln_#>`, `<em_#>`, `<ph_#>`
 - Isolation key: `thread_id + session_id + visitor_id + client_id + assistant_id`
-- API surface: REST only (`/redact`, `/rehydrate`, `/session/end`, `/health`)
+- API surface: REST only (`/redact`, `/rehydrate`, `/session/end`, `/allowlist/refresh`, `/health`)
 - Security: API key (raw or SHA-256 hash verification)
 - Detection backend: Presidio + GLiNER (automatic fallback to regex/heuristics)
 - Default failure policy: fail-closed (per-request override available)
@@ -65,11 +65,12 @@ If you see `{"detail":"Server is missing API key configuration"}`:
 
 Use this order in your app:
 
-1. Call `/redact` with the raw user message before sending content to your LLM.
-2. Send `redacted` message to the LLM.
-3. Call `/rehydrate` with the LLM output.
-4. Render `clean` text to end users.
-5. Call `/session/end` when the thread ends.
+1. (Optional, recommended) Call `/allowlist/refresh` when community/plan data changes for an assistant.
+2. Call `/redact` with the raw user message before sending content to your LLM.
+3. Send `redacted` message to the LLM.
+4. Call `/rehydrate` with the LLM output.
+5. Render `clean` text to end users.
+6. Call `/session/end` when the thread ends.
 
 Required scope fields on every request:
 
@@ -77,7 +78,7 @@ Required scope fields on every request:
 - `session_id`
 - `visitor_id`
 - `client_id`
-- `assistant_id`
+- `assistant_id` (optional; defaults to `<client_id>_chat_001` when omitted/blank)
 
 ### Request Notes
 
@@ -89,6 +90,10 @@ Required scope fields on every request:
 - `/rehydrate`
   - Use `failure_mode="closed"` for user-facing flows.
   - Use `failure_mode="open"` only for internal redacted-only tooling.
+- `/allowlist/refresh`
+  - Stores a per-`client_id+assistant_id` non-name allowlist in local cache files.
+  - Rewrites cache file only when extracted term content changes.
+  - Supports direct `terms` or selector-based extraction from arbitrary JSON payloads.
 
 ### Failure Policy
 
@@ -105,6 +110,55 @@ Required scope fields on every request:
   - Writes are queued asynchronously (non-blocking request path)
   - Queue pressure or persistence health can force fail-closed behavior
   - Rehydrate resolves memory first, then persistence fallback
+
+### Local Allowlist Cache
+
+- `PII_REDACTOR_ALLOWLIST_CACHE_ENABLED=true` enables local per-assistant cache.
+- Cache key: `client_id + assistant_id`.
+- Cache file writes are atomic and content-hash based (unchanged refreshes do not rewrite files).
+- `/redact` automatically merges:
+  - cached allowlist terms (if present)
+  - request `non_name_allowlist` terms (if provided)
+
+#### Refresh Payload Selectors
+
+Use selectors to extract terms from varying JSON schemas or table-shaped payloads:
+
+- `selector`: path expression with support for:
+  - `.` key traversal
+  - `*` wildcard child selection
+  - `**` recursive descent
+  - `[index]` list index
+- `include`:
+  - `values`: collect string values
+  - `keys`: collect object keys
+  - `both`: collect both
+
+Examples:
+
+- Floor plans (extract only `name` fields):
+
+```json
+{
+  "client_id": "c1",
+  "assistant_id": "a1",
+  "payload": {"rows":[{"name":"Cypress II"},{"name":"Hampton II"}]},
+  "selectors": [{"selector":"**.name","include":"values"}],
+  "source_version": "fp_2026-04-14T10:00:00Z"
+}
+```
+
+- Community tree (extract keys):
+
+```json
+{
+  "client_id": "c1",
+  "assistant_id": "a1",
+  "payload": {"Windsor":{"Old Redwood Village":[]}},
+  "selectors": [{"selector":"**","include":"keys"}],
+  "source_version": "community_2026-04-14T10:00:00Z"
+}
+```
 
 ### Persistence Mode Selector
 

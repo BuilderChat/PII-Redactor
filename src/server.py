@@ -5,10 +5,13 @@ import secrets
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
+from .allowlist_cache import AllowlistSelector, LocalAllowlistCache, extract_allowlist_terms
 from .config import get_settings
 from .middleware import PIIMiddleware
 from .persistence import PersistenceConfigError, build_vault_store
 from .schemas import (
+    AllowlistRefreshRequest,
+    AllowlistRefreshResponse,
     HealthResponse,
     RedactRequest,
     RedactResponse,
@@ -24,7 +27,19 @@ try:
 except PersistenceConfigError as exc:
     raise RuntimeError(f"Invalid persistence configuration: {exc}") from exc
 
-middleware = PIIMiddleware(vault_store=vault_store, persistence_mode=persistence_mode)
+allowlist_cache = (
+    LocalAllowlistCache(
+        settings.allowlist_cache_dir,
+        max_terms=settings.allowlist_cache_max_terms,
+    )
+    if settings.allowlist_cache_enabled
+    else None
+)
+middleware = PIIMiddleware(
+    vault_store=vault_store,
+    persistence_mode=persistence_mode,
+    allowlist_cache=allowlist_cache,
+)
 app = FastAPI(title="PII Redactor", version="0.1.0")
 
 
@@ -121,6 +136,51 @@ def end_session(request: SessionEndRequest) -> SessionEndResponse:
     return SessionEndResponse(status=status_text)
 
 
+@app.post(
+    "/allowlist/refresh",
+    response_model=AllowlistRefreshResponse,
+    dependencies=[Depends(_validate_api_key)],
+)
+def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshResponse:
+    if allowlist_cache is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Allowlist cache is not enabled on this server",
+        )
+
+    terms: list[str] = list(request.terms or ())
+    if request.payload is not None and request.selectors:
+        selectors = [
+            AllowlistSelector(selector=item.selector, include=item.include)
+            for item in request.selectors
+        ]
+        try:
+            terms.extend(extract_allowlist_terms(request.payload, selectors))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    try:
+        result = allowlist_cache.refresh(
+            client_id=request.client_id,
+            assistant_id=request.assistant_id,
+            terms=terms,
+            source_version=request.source_version,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    return AllowlistRefreshResponse(
+        status="updated" if result.changed else "unchanged",
+        client_id=request.client_id,
+        assistant_id=request.assistant_id,
+        term_count=result.term_count,
+        changed=result.changed,
+        content_hash=result.content_hash,
+        source_version=result.source_version,
+        cache_file=result.cache_file,
+    )
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     detector_status = middleware.detector_status
@@ -137,4 +197,5 @@ def health() -> HealthResponse:
         persistence_queue_depth=int(detector_status.get("persistence_queue_depth", 0)),
         scope_ttl_seconds=int(detector_status.get("scope_ttl_seconds", 0)),
         max_active_scopes=int(detector_status.get("max_active_scopes", 0)),
+        allowlist_cache_enabled=bool(detector_status.get("allowlist_cache_enabled")),
     )

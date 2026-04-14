@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
-from src.schemas import RedactRequest, RehydrateRequest
+from src.schemas import AllowlistRefreshRequest, RedactRequest, RehydrateRequest
 
 
 def test_thread_id_is_required_and_must_start_with_thread_prefix() -> None:
@@ -63,3 +63,41 @@ def test_rehydrate_failure_mode_resolution() -> None:
     )
     assert request.fail_closed(default_closed=True) is False
 
+
+def test_scope_request_defaults_assistant_id_from_client_id() -> None:
+    redact = RedactRequest(
+        thread_id="thread_default_assistant",
+        session_id="s1",
+        visitor_id="v1",
+        client_id="client_xyz",
+        message="hello",
+    )
+    assert redact.assistant_id == "client_xyz_chat_001"
+    assert redact.to_scope().assistant_id == "client_xyz_chat_001"
+
+
+def test_allowlist_refresh_requires_terms_or_payload_and_selectors() -> None:
+    try:
+        AllowlistRefreshRequest(
+            client_id="c1",
+            assistant_id="a1",
+        )
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("Expected allowlist refresh validation error")
+
+    request = AllowlistRefreshRequest(
+        client_id="c1",
+        assistant_id="a1",
+        terms=["Windsor"],
+    )
+    assert request.client_id == "c1"
+
+
+def test_allowlist_refresh_defaults_assistant_id_from_client_id() -> None:
+    request = AllowlistRefreshRequest(
+        client_id="client_123",
+        terms=["Windsor"],
+    )
+    assert request.assistant_id == "client_123_chat_001"

@@ -1,10 +1,21 @@
 from __future__ import annotations
 
 from typing import Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
+from pydantic import model_validator
 
 from .types import ScopeContext
+
+
+def _resolve_assistant_id(client_id: str, assistant_id: str | None) -> str:
+    candidate = (assistant_id or "").strip()
+    if not candidate:
+        candidate = f"{client_id}_chat_001"
+    if len(candidate) > 128:
+        raise ValueError("assistant_id must be <= 128 characters after defaulting")
+    return candidate
 
 
 class ScopeRequest(BaseModel):
@@ -12,7 +23,12 @@ class ScopeRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     visitor_id: str = Field(min_length=1, max_length=128)
     client_id: str = Field(min_length=1, max_length=128)
-    assistant_id: str = Field(min_length=1, max_length=128)
+    assistant_id: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def default_assistant(self) -> "ScopeRequest":
+        self.assistant_id = _resolve_assistant_id(self.client_id, self.assistant_id)
+        return self
 
     def to_scope(self) -> ScopeContext:
         return ScopeContext(
@@ -56,6 +72,40 @@ class SessionEndRequest(ScopeRequest):
     pass
 
 
+class AllowlistSelectorRequest(BaseModel):
+    selector: str = Field(min_length=1, max_length=256)
+    include: Literal["values", "keys", "both"] = "values"
+
+
+class AllowlistRefreshRequest(BaseModel):
+    client_id: str = Field(min_length=1, max_length=128)
+    assistant_id: str | None = Field(default=None, max_length=128)
+    payload: Any | None = None
+    selectors: list[AllowlistSelectorRequest] | None = None
+    terms: list[str] | None = None
+    source_version: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_sources(self) -> "AllowlistRefreshRequest":
+        self.assistant_id = _resolve_assistant_id(self.client_id, self.assistant_id)
+        if self.terms:
+            return self
+        if self.payload is not None and self.selectors:
+            return self
+        raise ValueError("Provide either terms or payload+selectors for allowlist refresh")
+
+
+class AllowlistRefreshResponse(BaseModel):
+    status: Literal["updated", "unchanged"]
+    client_id: str
+    assistant_id: str
+    term_count: int
+    changed: bool
+    content_hash: str
+    source_version: str | None = None
+    cache_file: str
+
+
 class RedactResponse(BaseModel):
     redacted: str
     active_user_index: int
@@ -85,3 +135,4 @@ class HealthResponse(BaseModel):
     persistence_queue_depth: int
     scope_ttl_seconds: int
     max_active_scopes: int
+    allowlist_cache_enabled: bool
