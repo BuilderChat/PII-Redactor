@@ -60,4 +60,3 @@ def test_ttl_prunes_in_memory_scope() -> None:
     with middleware._lock:  # type: ignore[attr-defined]
         middleware._vaults[key].last_access_epoch = time.time() - 7200  # type: ignore[attr-defined]
     assert middleware.active_sessions == 0
-
