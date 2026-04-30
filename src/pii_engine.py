@@ -25,6 +25,10 @@ NAME_INTRO_RE = re.compile(
     re.IGNORECASE,
 )
 NAME_REPLY_RE = re.compile(r"^\s*[A-Z][A-Za-z'\-]*(?:\s+[A-Z][A-Za-z'\-]*){0,4}[.!?]?\s*$")
+ACKNOWLEDGEMENT_PREFIX_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|yup|sure|ok|okay)\b(?:\s*[,.;:!?]+\s*|\s*[-–—]\s*|\s+)",
+    re.IGNORECASE | re.UNICODE,
+)
 COORDINATED_NAME_RE = re.compile(
     r"\b([A-Z][A-Za-z'\-]*)\s+(?:and|&)\s+([A-Za-z][A-Za-z'\-]*)\s+([A-Z][A-Za-z'\-]*)\b"
 )
@@ -69,10 +73,27 @@ REALTOR_PAIR_INTRO_RE = re.compile(
     r"(?P<cue>realtor(?:s)?|agent(?:s)?|broker(?:s)?)\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_NAME_ALIAS_RE = re.compile(
+    rf"^\s*(?P<first>{NAME_WORD_PATTERN})\s*"
+    rf"(?:\((?P<paren>{NAME_WORD_PATTERN})\)|[-–—]\s*(?:(?:short\s+for\s+|nickname\s+)(?P<dash_phrase>{NAME_WORD_PATTERN})|(?P<dash>{NAME_WORD_PATTERN})))",
+    re.IGNORECASE | re.UNICODE,
+)
+PROMPTED_INITIAL_FULL_NAME_RE = re.compile(
+    rf"^\s*(?P<first>{NAME_WORD_PATTERN})\s+(?P<middle>[^\W\d_])\.?\s+(?P<last>{NAME_WORD_PATTERN})\b",
+    re.UNICODE,
+)
 SIGNATURE_TAIL_NAME_RE = re.compile(
     rf"[?.!]\s+(?P<first>{NAME_WORD_PATTERN})\s+(?P<last>{NAME_WORD_PATTERN})"
     r"(?P<tail>(?:\s+[A-Za-z0-9][A-Za-z0-9'\-]*){1,6})\s*$",
     re.IGNORECASE | re.UNICODE,
+)
+SIGNATURE_DELIMITED_NAME_RE = re.compile(
+    rf"(?P<delimiter>[.!?]|[-–—]|\()"
+    rf"\s*(?P<first>{NAME_WORD_PATTERN})"
+    rf"(?:\s+(?P<middle>[^\W\d_])\.?)?"
+    rf"\s+(?P<last>{NAME_WORD_PATTERN})"
+    rf"(?P<closing>\))?\s*$",
+    re.UNICODE,
 )
 SIGNATURE_BROKERAGE_CUES = {
     "realtor",
@@ -89,6 +110,27 @@ SIGNATURE_BROKERAGE_CUES = {
     "judge",
     "fite",
 }
+SIGNATURE_CONTEXT_CUES = (
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "thank you",
+    "thanks",
+    "please",
+    "confirm",
+    "confirmed",
+    "received",
+    "receipt",
+    "request",
+    "question",
+    "submitted",
+    "follow up",
+    "follow-up",
+    "i ",
+    " i'",
+    "my ",
+    " me ",
+)
 ASSISTANT_NAME_GREETINGS = {"hello", "hi", "hey"}
 DEFAULT_ASSISTANT_NAME_WORDS = {"mia", "ava", "aurora", "blossom"}
 HARDCODED_NON_NAME_PHRASES = {
@@ -357,14 +399,19 @@ NON_NAME_SINGLE_WORDS = {
     "if",
     "just",
     "great",
+    "like",
+    "monday",
     "va",
     "veteran",
     "vet",
     "military",
     "senior",
+    "sorry",
     "teacher",
+    "typo",
     "doctor",
     "nurse",
+    "would",
 }
 NON_NAME_MULTIWORD_COMPONENTS = {
     "agent",
@@ -910,6 +957,7 @@ class PIIEngine:
             spans.extend(self._detect_contact_then_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_contact_with_parenthetical_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_signature_tail_name_spans(text, non_name_terms=runtime_non_name_terms))
+            spans.extend(self._detect_terminal_signature_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_realtor_pair_intro_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_affirmative_name_contact_spans(text, non_name_terms=runtime_non_name_terms))
             if vault is not None:
@@ -1054,26 +1102,97 @@ class PIIEngine:
         if request_type not in {"first", "last", "full"}:
             return []
 
-        match = re.match(rf"^\s*({NAME_WORD_PATTERN})\b", text, flags=re.UNICODE)
+        working_text = text
+        base_offset = 0
+        had_acknowledgement_prefix = False
+        if request_type in {"first", "full"}:
+            stripped_text, stripped_offset, has_prefix = self._strip_leading_acknowledgement_prefix(text)
+            if has_prefix:
+                working_text = stripped_text
+                base_offset = stripped_offset
+                had_acknowledgement_prefix = True
+
+        def _span(
+            start: int,
+            end: int,
+            entity_key: str,
+            value: str,
+            prefer_latest: bool = False,
+        ) -> Span:
+            return Span(
+                start + base_offset,
+                end + base_offset,
+                entity_key,
+                value,
+                prefer_latest=prefer_latest,
+            )
+
+        if request_type in {"first", "full"}:
+            alias_match = PROMPTED_NAME_ALIAS_RE.match(working_text)
+            if alias_match:
+                first = alias_match.group("first")
+                alias = alias_match.group("paren") or alias_match.group("dash_phrase") or alias_match.group("dash")
+                if first and alias:
+                    first_normalized = first.lower()
+                    alias_normalized = alias.lower()
+                    if not any(self._is_blocked_name_token(token) for token in (first_normalized, alias_normalized)):
+                        if (
+                            self._normalize_text_phrase(first) not in non_name_terms
+                            and self._normalize_text_phrase(alias) not in non_name_terms
+                        ):
+                            trailing = working_text[alias_match.end() :].strip()
+                            if not trailing or re.fullmatch(r"[.,!?;:)\]}\"']*", trailing):
+                                return [
+                                    _span(alias_match.start("first"), alias_match.end("first"), "fn", first),
+                                    _span(
+                                        alias_match.start("paren") if alias_match.group("paren") else (
+                                            alias_match.start("dash_phrase") if alias_match.group("dash_phrase") else alias_match.start("dash")
+                                        ),
+                                        alias_match.end("paren") if alias_match.group("paren") else (
+                                            alias_match.end("dash_phrase") if alias_match.group("dash_phrase") else alias_match.end("dash")
+                                        ),
+                                        "fn",
+                                        alias,
+                                    ),
+                                ]
+
+            initial_full_match = PROMPTED_INITIAL_FULL_NAME_RE.match(working_text)
+            if initial_full_match:
+                first = initial_full_match.group("first")
+                middle = initial_full_match.group("middle")
+                last = initial_full_match.group("last")
+                if not any(self._is_blocked_name_token(token.lower()) for token in (first, last)):
+                    full_value = f"{first} {middle} {last}"
+                    full_normalized = self._normalize_text_phrase(full_value)
+                    tail_after_initial = working_text[initial_full_match.end("last") :]
+                    tail_after_initial_stripped = tail_after_initial.strip()
+                    tail_after_initial_contact = re.sub(r"^[\s,;:\-]+", "", tail_after_initial)
+                    has_contact_tail = bool(
+                        tail_after_initial_contact
+                        and (EMAIL_RE.match(tail_after_initial_contact) or PHONE_RE.match(tail_after_initial_contact))
+                    )
+                    if full_normalized not in non_name_terms and (
+                        not tail_after_initial_stripped
+                        or re.fullmatch(r"[.,!?;:)\]}\"']*", tail_after_initial_stripped)
+                        or has_contact_tail
+                    ):
+                        return [
+                            _span(
+                                initial_full_match.start("first"),
+                                initial_full_match.end("last"),
+                                "name",
+                                full_value,
+                            )
+                        ]
+
+        match = re.match(rf"^\s*({NAME_WORD_PATTERN})\b", working_text, flags=re.UNICODE)
         if not match:
             return []
 
         value = match.group(1)
         normalized = value.lower()
-        words = re.findall(NAME_WORD_PATTERN, text, flags=re.UNICODE)
-        if normalized in NON_NAME_SINGLE_WORDS:
-            return []
-        if normalized in NAME_PREFIX_EXCLUSIONS:
-            return []
-        if normalized in NON_NAME_MULTIWORD_COMPONENTS:
-            return []
-        if normalized in NON_NAME_PHRASE_HINTS:
-            return []
-        if normalized in GEO_DIRECTION_WORDS:
-            return []
-        if normalized in GEO_REGION_ABBREVIATIONS:
-            return []
-        if self._contains_phrase([normalized], GEO_REGION_PHRASES):
+        words = re.findall(NAME_WORD_PATTERN, working_text, flags=re.UNICODE)
+        if self._is_blocked_name_token(normalized):
             return []
         first_word_in_non_name_terms = self._normalize_text_phrase(value) in non_name_terms
         if first_word_in_non_name_terms and request_type != "full":
@@ -1082,34 +1201,37 @@ class PIIEngine:
         # Support "name + contact" replies under prompted name collection flows:
         # - first-name prompt: "Lynn 925.963.1940"
         # - full-name prompt: "Angela wbarno2010@gmail.com"
-        tail_candidate = re.sub(r"^[\s,;:\-]+", "", text[match.end(1) :]).strip()
+        tail_candidate = re.sub(r"^[\s,;:\-]+", "", working_text[match.end(1) :]).strip()
         if tail_candidate:
             trimmed_tail = tail_candidate.rstrip(".,!?;)")
             has_contact_tail = bool(EMAIL_RE.fullmatch(trimmed_tail) or PHONE_RE.fullmatch(trimmed_tail))
             if has_contact_tail:
                 if request_type in {"first", "full"}:
-                    return [Span(match.start(1), match.end(1), "fn", value)]
+                    return [_span(match.start(1), match.end(1), "fn", value)]
                 if request_type == "last":
-                    return [Span(match.start(1), match.end(1), "ln", value)]
+                    return [_span(match.start(1), match.end(1), "ln", value)]
 
         # First-name asks often receive "Name, email phone" in one line.
         # Keep this deterministic: redact only the leading token when contact appears later.
         if request_type == "first":
-            tail_text_for_first = text[match.end(1) :]
+            tail_text_for_first = working_text[match.end(1) :]
             if tail_text_for_first and (EMAIL_RE.search(tail_text_for_first) or PHONE_RE.search(tail_text_for_first)):
-                return [Span(match.start(1), match.end(1), "fn", value)]
+                return [_span(match.start(1), match.end(1), "fn", value)]
+
+            if had_acknowledgement_prefix and re.match(r"\s*[,.;:!?-–—]\s+", tail_text_for_first):
+                return [_span(match.start(1), match.end(1), "fn", value)]
 
         if request_type == "full":
-            initial_full_match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+([^\W\d_])\b", text, flags=re.UNICODE)
+            initial_full_match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+([^\W\d_])\b", working_text, flags=re.UNICODE)
             if initial_full_match:
-                tail_after_initial = text[initial_full_match.end(2) :]
+                tail_after_initial = working_text[initial_full_match.end(2) :]
                 if not tail_after_initial.strip() or tail_after_initial.lstrip()[:1] in {",", ".", "!", "?", ";", ":"}:
                     full_value = f"{initial_full_match.group(1)} {initial_full_match.group(2)}"
-                    return [Span(initial_full_match.start(1), initial_full_match.end(2), "name", full_value)]
+                    return [_span(initial_full_match.start(1), initial_full_match.end(2), "name", full_value)]
 
             csv_match = re.match(
                 rf"^\s*({NAME_WORD_PATTERN})\s*,\s*({NAME_WORD_PATTERN})\s*,\s*(.+?)\s*$",
-                text,
+                working_text,
                 flags=re.UNICODE,
             )
             if csv_match:
@@ -1118,11 +1240,11 @@ class PIIEngine:
                 contact = csv_match.group(3).rstrip(".,!?;)")
                 if EMAIL_RE.fullmatch(contact) or PHONE_RE.fullmatch(contact):
                     full_value = f"{first} {last}"
-                    return [Span(csv_match.start(1), csv_match.end(2), "name", full_value)]
+                    return [_span(csv_match.start(1), csv_match.end(2), "name", full_value)]
 
             dash_match = re.match(
                 rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\s*-\s*(.+?)\s*$",
-                text,
+                working_text,
                 flags=re.UNICODE,
             )
             if dash_match:
@@ -1131,11 +1253,11 @@ class PIIEngine:
                 contact = dash_match.group(3).rstrip(".,!?;)")
                 if EMAIL_RE.fullmatch(contact) or PHONE_RE.fullmatch(contact):
                     full_value = f"{first} {last}"
-                    return [Span(dash_match.start(1), dash_match.end(2), "name", full_value)]
+                    return [_span(dash_match.start(1), dash_match.end(2), "name", full_value)]
 
             three_part_match = re.match(
                 rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b",
-                text,
+                working_text,
                 flags=re.UNICODE,
             )
             if three_part_match:
@@ -1168,8 +1290,8 @@ class PIIEngine:
                             or tail_after_three_stripped[0] in {",", ".", "!", "?", ";", ":"}
                             or has_contact_tail
                         )
-                    ):
-                        return [Span(three_part_match.start(1), three_part_match.end(3), "name", full_value)]
+                        ):
+                        return [_span(three_part_match.start(1), three_part_match.end(3), "name", full_value)]
 
         if request_type == "last" and vault is not None:
             # If first name is already captured and user replies "First Last <contact>",
@@ -1178,7 +1300,7 @@ class PIIEngine:
             known_first = vault.get(fn_token) if fn_token else ""
             two_part_match = re.match(
                 rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b",
-                text,
+                working_text,
                 flags=re.UNICODE,
             )
             if known_first and two_part_match:
@@ -1204,17 +1326,17 @@ class PIIEngine:
                     and not self._contains_phrase([second_normalized], GEO_REGION_PHRASES)
                     and self._normalize_text_phrase(second) not in non_name_terms
                 ):
-                    tail_after_second = text[two_part_match.end(2) :]
+                    tail_after_second = working_text[two_part_match.end(2) :]
                     tail_after_second_normalized = tail_after_second.strip().lower()
                     has_contact_after_second = bool(
                         EMAIL_RE.search(tail_after_second) or PHONE_RE.search(tail_after_second)
                     )
                     if has_contact_after_second:
-                        return [Span(two_part_match.start(2), two_part_match.end(2), "ln", second)]
+                        return [_span(two_part_match.start(2), two_part_match.end(2), "ln", second)]
                     if tail_after_second_normalized.startswith(("my full name", "full name", "my name")):
                         full_value = f"{first} {second}"
                         return [
-                            Span(
+                            _span(
                                 two_part_match.start(1),
                                 two_part_match.end(2),
                                 "name",
@@ -1228,7 +1350,7 @@ class PIIEngine:
                     rf"\b({re.escape(known_first)})\b\s+({NAME_WORD_PATTERN})\b",
                     flags=re.IGNORECASE | re.UNICODE,
                 )
-                follow_match = known_first_pattern.search(text)
+                follow_match = known_first_pattern.search(working_text)
                 if follow_match:
                     candidate_last = follow_match.group(2)
                     candidate_normalized = candidate_last.lower()
@@ -1242,7 +1364,7 @@ class PIIEngine:
                         and not self._contains_phrase([candidate_normalized], GEO_REGION_PHRASES)
                         and self._normalize_text_phrase(candidate_last) not in non_name_terms
                     ):
-                        return [Span(follow_match.start(2), follow_match.end(2), "ln", candidate_last)]
+                        return [_span(follow_match.start(2), follow_match.end(2), "ln", candidate_last)]
 
         if len(words) >= 2:
             second = words[1]
@@ -1260,7 +1382,7 @@ class PIIEngine:
             # treat it as a full name to avoid redacting only the first token.
             full_match = re.match(
                 rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b",
-                text,
+                working_text,
                 flags=re.UNICODE,
             )
             if full_match:
@@ -1292,7 +1414,7 @@ class PIIEngine:
                     )
                 ):
                     return [
-                        Span(
+                        _span(
                             full_match.start(1),
                             full_match.end(2),
                             "name",
@@ -1312,7 +1434,7 @@ class PIIEngine:
                         and second_normalized not in NAME_PREFIX_EXCLUSIONS
                         and full_normalized not in non_name_terms
                     ):
-                        return [Span(full_match.start(1), full_match.end(2), "name", full_value)]
+                        return [_span(full_match.start(1), full_match.end(2), "name", full_value)]
 
             # First-name prompts should not redact arbitrary sentence starters.
             # If we did not accept a clean name pattern above, treat multi-word
@@ -1323,7 +1445,7 @@ class PIIEngine:
         if request_type == "full":
             return []
 
-        tail_text = text[match.end(1) :]
+        tail_text = working_text[match.end(1) :]
         if re.match(r"\s+\d", tail_text):
             return []
 
@@ -1351,14 +1473,14 @@ class PIIEngine:
             return []
 
         entity_key = "fn" if request_type == "first" else "ln"
-        return [Span(match.start(1), match.end(1), entity_key, value)]
+        return [_span(match.start(1), match.end(1), entity_key, value)]
 
     def _detect_affirmative_name_contact_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
-        match = re.match(
-            rf"^\s*(?:yes|yeah|yep|yup|sure|ok|okay)\s+({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b",
-            text,
-            flags=re.IGNORECASE | re.UNICODE,
-        )
+        stripped_text, base_offset, has_prefix = self._strip_leading_acknowledgement_prefix(text)
+        if not has_prefix:
+            return []
+
+        match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b", stripped_text, flags=re.UNICODE)
         if not match:
             return []
 
@@ -1380,13 +1502,13 @@ class PIIEngine:
         if full_normalized in non_name_terms:
             return []
 
-        tail_after_second = text[match.end(2) :]
+        tail_after_second = stripped_text[match.end(2) :]
         if not (EMAIL_RE.search(tail_after_second) or PHONE_RE.search(tail_after_second)):
             return []
 
         return [
-            Span(match.start(1), match.end(1), "fn", first),
-            Span(match.start(2), match.end(2), "ln", second),
+            Span(match.start(1) + base_offset, match.end(1) + base_offset, "fn", first),
+            Span(match.start(2) + base_offset, match.end(2) + base_offset, "ln", second),
         ]
 
     def _detect_leading_name_with_contact_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
@@ -1533,6 +1655,48 @@ class PIIEngine:
             return []
 
         return [Span(match.start("first"), match.end("last"), "name", f"{first} {last}")]
+
+    def _detect_terminal_signature_name_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
+        match = SIGNATURE_DELIMITED_NAME_RE.search(text)
+        if not match:
+            return []
+
+        delimiter = match.group("delimiter")
+        if delimiter == "(" and not match.group("closing"):
+            return []
+
+        prefix_text = text[: match.start()].strip()
+        if len(re.findall(NAME_WORD_PATTERN, prefix_text, flags=re.UNICODE)) < 4:
+            return []
+
+        prefix_normalized = re.sub(r"\s+", " ", prefix_text.lower())
+        if not any(cue in prefix_normalized for cue in SIGNATURE_CONTEXT_CUES):
+            return []
+
+        first = match.group("first")
+        middle = match.group("middle")
+        last = match.group("last")
+        if not first[:1].isupper() or not last[:1].isupper():
+            return []
+
+        token_norms = [first.lower(), last.lower()]
+        if any(self._is_blocked_name_token(token) for token in token_norms):
+            return []
+
+        full_value = f"{first} {middle} {last}" if middle else f"{first} {last}"
+        full_normalized = self._normalize_text_phrase(full_value)
+        if full_normalized in non_name_terms:
+            return []
+
+        lower_words = full_normalized.split()
+        if self._looks_like_location_non_name_phrase(lower_words, non_name_terms):
+            return []
+        if self._looks_like_geo_non_name_phrase(lower_words, non_name_terms):
+            return []
+        if self._looks_like_company_non_name_phrase(lower_words):
+            return []
+
+        return [Span(match.start("first"), match.end("last"), "name", full_value)]
 
     def _detect_realtor_pair_intro_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
         match = REALTOR_PAIR_INTRO_RE.match(text)
@@ -2177,6 +2341,18 @@ class PIIEngine:
         return False
 
     @staticmethod
+    def _is_blocked_name_token(normalized: str) -> bool:
+        return (
+            normalized in NON_NAME_SINGLE_WORDS
+            or normalized in NAME_PREFIX_EXCLUSIONS
+            or normalized in NON_NAME_MULTIWORD_COMPONENTS
+            or normalized in NON_NAME_PHRASE_HINTS
+            or normalized in GEO_DIRECTION_WORDS
+            or normalized in GEO_REGION_ABBREVIATIONS
+            or PIIEngine._contains_phrase([normalized], GEO_REGION_PHRASES)
+        )
+
+    @staticmethod
     def _looks_like_company_non_name_phrase(lower_words: list[str]) -> bool:
         if len(lower_words) < 2:
             return False
@@ -2188,6 +2364,18 @@ class PIIEngine:
     @staticmethod
     def _normalize_text_phrase(value: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"[^A-Za-z0-9'\-\s]", " ", value).strip().lower())
+
+    @staticmethod
+    def _strip_leading_acknowledgement_prefix(text: str) -> tuple[str, int, bool]:
+        match = ACKNOWLEDGEMENT_PREFIX_RE.match(text)
+        if not match:
+            return text, 0, False
+
+        stripped = text[match.end() :]
+        if not stripped.strip():
+            return text, 0, False
+
+        return stripped, match.end(), True
 
     def _should_suppress_name_detection(
         self,

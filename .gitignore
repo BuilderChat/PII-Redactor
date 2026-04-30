@@ -9,6 +9,7 @@ __pycache__/
 # Local sensitive files or non-needed for commit
 tests/fixtures/private/
 deferred_list.md
+notes.txt
 
 # Distribution / packaging
 .Python
