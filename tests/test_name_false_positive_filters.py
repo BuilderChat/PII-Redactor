@@ -45,6 +45,21 @@ def test_single_word_reply_redacts_when_assistant_asks_for_name() -> None:
     assert _redact("Jinbad", previous_assistant_message=prompt) == "<fn_1>"
 
 
+def test_first_name_prompt_redacts_name_after_affirmative_period() -> None:
+    prompt = "Thanks! Is that your phone number? And what's your first name so I can pass this along?"
+    assert _redact("Yes. Luis", previous_assistant_message=prompt) == "Yes. <fn_1>"
+
+
+def test_first_name_prompt_redacts_name_after_affirmative_dash() -> None:
+    prompt = "What's your first name?"
+    assert _redact("Yes - Tim", previous_assistant_message=prompt) == "Yes - <fn_1>"
+
+
+def test_first_name_prompt_redacts_name_after_affirmative_comma() -> None:
+    prompt = "What's your first name?"
+    assert _redact("Yup, Jeff", previous_assistant_message=prompt) == "Yup, <fn_1>"
+
+
 def test_runtime_non_name_allowlist_blocks_city_and_community_terms() -> None:
     assert _redact("In Windsor", non_name_allowlist=["Windsor"]) == "In Windsor"
     assert _redact("Shadow Hills", non_name_allowlist=["Shadow Hills"]) == "Shadow Hills"
@@ -312,6 +327,16 @@ def test_full_name_prompt_accepts_one_letter_last_initial() -> None:
     assert _redact("tom w", previous_assistant_message=prompt) == "<fn_1> <ln_1>"
 
 
+def test_first_name_prompt_accepts_three_part_name_with_middle_initial() -> None:
+    prompt = "Got it! What's your first name?"
+    assert _redact("Rebecca H Powell", previous_assistant_message=prompt) == "<fn_1> <mn1_1> <ln_1>"
+
+
+def test_first_name_prompt_accepts_three_part_name_with_dotted_middle_initial() -> None:
+    prompt = "Got it! What's your first name?"
+    assert _redact("Rebecca H. Powell", previous_assistant_message=prompt) == "<fn_1> <mn1_1> <ln_1>"
+
+
 def test_full_name_prompt_accepts_lowercase_three_part_name() -> None:
     prompt = "Quick info needed: your first and last name, plus email or phone."
     assert _redact("lauren caryk bunker", previous_assistant_message=prompt) == "<fn_1> <mn1_1> <ln_1>"
@@ -436,6 +461,27 @@ def test_signature_tail_name_with_brokerage_cue_is_redacted() -> None:
     )
 
 
+def test_signature_tail_name_after_sentence_is_redacted() -> None:
+    text = "Good afternoon. I just submitted a warranty request. I just want to confirm that it was received. Dennis Larkin"
+    assert _redact(text) == (
+        "Good afternoon. I just submitted a warranty request. I just want to confirm that it was received. <fn_1> <ln_1>"
+    )
+
+
+def test_signature_tail_name_after_dash_is_redacted() -> None:
+    text = "Good afternoon. I just submitted a warranty request and want to confirm it was received - Dennis Larkin"
+    assert _redact(text) == (
+        "Good afternoon. I just submitted a warranty request and want to confirm it was received - <fn_1> <ln_1>"
+    )
+
+
+def test_signature_tail_name_in_parentheses_is_redacted() -> None:
+    text = "Good afternoon. I just submitted a warranty request and want to confirm it was received (Dennis Larkin)"
+    assert _redact(text) == (
+        "Good afternoon. I just submitted a warranty request and want to confirm it was received (<fn_1> <ln_1>)"
+    )
+
+
 def test_form_labelled_name_line_is_redacted_deterministically() -> None:
     text = "Your name (first & last): Yash Bhimani"
     assert _redact(text) == "Your name (first & last): <fn_1> <ln_1>"
@@ -520,6 +566,21 @@ def test_phone_with_parenthetical_name_redacts_parenthetical_name() -> None:
     assert _redact(text) == "Sure <ph_1> (<fn_1>)"
 
 
+def test_first_name_prompt_with_parenthetical_alias_redacts_both_names() -> None:
+    prompt = "Great! I'll get your details so the team can reach out. What's your first name?"
+    assert _redact("Debbie (Debra)", previous_assistant_message=prompt) == "<fn_1> (<fn_2>)"
+
+
+def test_first_name_prompt_with_dash_alias_redacts_both_names() -> None:
+    prompt = "What's your first name?"
+    assert _redact("Jon - Jonathan", previous_assistant_message=prompt) == "<fn_1> - <fn_2>"
+
+
+def test_first_name_prompt_with_short_for_alias_redacts_both_names() -> None:
+    prompt = "What's your first name?"
+    assert _redact("Jim - short for James", previous_assistant_message=prompt) == "<fn_1> - short for <fn_2>"
+
+
 def test_blossom_ai_phrase_is_not_redacted() -> None:
     assert _redact("Blossom AI") == "Blossom AI"
 
@@ -541,6 +602,16 @@ def test_incentive_ts_phrase_is_not_redacted() -> None:
 
 def test_move_in_ready_all_caps_phrase_is_not_redacted() -> None:
     assert _redact("MOVE IN READY") == "MOVE IN READY"
+
+
+def test_yes_would_like_phrase_is_not_redacted_as_name() -> None:
+    text = "Yes would like to look at the home. Have someone call me Monday 775.544.6095"
+    assert _redact(text) == "Yes would like to look at the home. Have someone call me Monday <ph_1>"
+
+
+def test_sorry_typo_phrase_is_not_redacted_as_name() -> None:
+    text = "Sorry typo 717 682 -6642"
+    assert _redact(text) == "Sorry typo <ph_1>"
 
 
 def test_typo_name_intro_my_nae_is_is_redacted() -> None:
@@ -580,6 +651,14 @@ def test_first_name_prompt_with_existing_contact_accepts_two_token_lowercase_nam
         previous_assistant_message="Got it! What's your first name so I can get those Brighton details sent over?",
     ).redacted_text
     assert redacted == "<fn_1> <ln_1>"
+
+
+def test_first_name_prompt_with_affirmative_then_name_and_prose_redacts_name_only() -> None:
+    prompt = "Thanks for sharing that! Just to confirm—is that the best number to reach you? And what's your first name?"
+    text = "Yes Genevieve, I live currently in Idaho Twin Falls. So I’ll be looking to sell my home to relocate."
+    assert _redact(text, previous_assistant_message=prompt) == (
+        "Yes <fn_1>, I live currently in Idaho Twin Falls. So I’ll be looking to sell my home to relocate."
+    )
 
 
 def test_last_name_prompt_with_trailing_request_still_redacts_last_name() -> None:
