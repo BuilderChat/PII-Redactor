@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -208,6 +209,7 @@ def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         active_sessions=middleware.active_sessions,
+        commit=os.getenv("REDACTOR_COMMIT", "unknown"),
         presidio_enabled=bool(detector_status.get("presidio_enabled")),
         gliner_enabled=bool(detector_status.get("gliner_enabled")),
         require_gliner=bool(settings.require_gliner),

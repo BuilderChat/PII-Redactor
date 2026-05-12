@@ -12,6 +12,11 @@
 - `src/schemas.py`: API request/response contracts.
 - `src/types.py`: Shared typed scope model.
 
+## Offline Tools
+
+- `scripts/redact_transcript_fixture.py`: Transcript fixture redaction utility with user-only, both-sides, and user-sourced-both modes.
+- `scripts/clean_transcripts.py`: Simple batch transcript cleaner that writes sibling `_cleaned` files and redacts user-provided PII across user and assistant messages.
+
 ## Documentation
 
 - `README.md`: Setup, API usage, persistence modes, integration flow.
@@ -26,3 +31,4 @@
 - `tests/test_schemas_contract.py`: Request schema validation and behavior.
 - `tests/test_middleware_*.py`: Scope isolation and runtime policies.
 - `tests/test_name_false_positive_filters.py`: Name redaction tuning regression coverage.
+- `tests/test_transcript_cleaner.py`: Offline transcript cleaning behavior and assistant-role compatibility coverage.

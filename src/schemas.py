@@ -138,3 +138,4 @@ class HealthResponse(BaseModel):
     scope_ttl_seconds: int
     max_active_scopes: int
     allowlist_cache_enabled: bool
+    commit: str = "unknown"
