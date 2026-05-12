@@ -72,6 +72,24 @@ If you are embedding this into another app image or running strict offline in Do
 
 - [`docs/BUILD_IMAGE_GUIDE.md`](docs/BUILD_IMAGE_GUIDE.md)
 
+## Offline Transcript Cleaning
+
+To clean exported transcript files in-place for review, run:
+
+```bash
+./myenv/bin/python scripts/clean_transcripts.py path/to/transcript.txt
+```
+
+This writes a sibling file named `transcript_cleaned.txt` and redacts user-provided PII in both:
+
+- user messages
+- assistant messages that repeat that same user-provided PII
+
+Optional allowlist inputs:
+
+- `--community-tree path/to/community_tree.json`
+- `--floor-plans path/to/floor_plans.json`
+
 ## Integration Guide
 
 Use this order in your app:
