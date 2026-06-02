@@ -206,8 +206,10 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     detector_status = middleware.detector_status
+    persistence_status = str(detector_status.get("persistence_status", "disabled"))
+    service_status = "degraded" if persistence_status in {"blocking", "degraded"} else "ok"
     return HealthResponse(
-        status="ok",
+        status=service_status,
         active_sessions=middleware.active_sessions,
         commit=os.getenv("REDACTOR_COMMIT", "unknown"),
         presidio_enabled=bool(detector_status.get("presidio_enabled")),
@@ -218,7 +220,39 @@ def health() -> HealthResponse:
         gliner_model=str(detector_status.get("gliner_model", "")),
         persistence_enabled=bool(detector_status.get("persistence_enabled")),
         persistence_mode=str(detector_status.get("persistence_mode", "none")),
+        persistence_status=persistence_status,
+        persistence_block_on_error=bool(detector_status.get("persistence_block_on_error")),
         persistence_healthy=bool(detector_status.get("persistence_healthy")),
+        persistence_last_error_type=(
+            str(detector_status.get("persistence_last_error_type"))
+            if detector_status.get("persistence_last_error_type")
+            else None
+        ),
+        persistence_last_error_operation=(
+            str(detector_status.get("persistence_last_error_operation"))
+            if detector_status.get("persistence_last_error_operation")
+            else None
+        ),
+        persistence_last_error_at=(
+            str(detector_status.get("persistence_last_error_at"))
+            if detector_status.get("persistence_last_error_at")
+            else None
+        ),
+        persistence_last_success_at=(
+            str(detector_status.get("persistence_last_success_at"))
+            if detector_status.get("persistence_last_success_at")
+            else None
+        ),
+        persistence_consecutive_failures=int(detector_status.get("persistence_consecutive_failures", 0)),
+        persistence_recovery_attempts=int(detector_status.get("persistence_recovery_attempts", 0)),
+        persistence_last_recovery_attempt_at=(
+            str(detector_status.get("persistence_last_recovery_attempt_at"))
+            if detector_status.get("persistence_last_recovery_attempt_at")
+            else None
+        ),
+        persistence_recovery_cooldown_seconds=int(
+            detector_status.get("persistence_recovery_cooldown_seconds", 0)
+        ),
         persistence_queue_depth=int(detector_status.get("persistence_queue_depth", 0)),
         scope_ttl_seconds=int(detector_status.get("scope_ttl_seconds", 0)),
         max_active_scopes=int(detector_status.get("max_active_scopes", 0)),

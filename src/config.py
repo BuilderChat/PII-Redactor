@@ -37,6 +37,7 @@ class Settings:
     max_active_scopes: int
     persistence_queue_max: int
     persistence_block_on_error: bool
+    persistence_recovery_cooldown_seconds: int
     persistence_key_version: str
     require_persistence: bool
     persistence_mode: str
@@ -124,6 +125,10 @@ def get_settings() -> Settings:
         max_active_scopes=max(1, _env_int("PII_REDACTOR_MAX_ACTIVE_SCOPES", 15)),
         persistence_queue_max=max(1, _env_int("PII_REDACTOR_PERSISTENCE_QUEUE_MAX", 1024)),
         persistence_block_on_error=_env_bool("PII_REDACTOR_PERSISTENCE_BLOCK_ON_ERROR", True),
+        persistence_recovery_cooldown_seconds=max(
+            1,
+            _env_int("PII_REDACTOR_PERSISTENCE_RECOVERY_COOLDOWN_SECONDS", 30),
+        ),
         persistence_key_version=os.getenv("PII_REDACTOR_PERSISTENCE_KEY_VERSION", "v1").strip() or "v1",
         require_persistence=_env_bool("PII_REDACTOR_REQUIRE_PERSISTENCE", False),
         persistence_mode=(os.getenv("PII_REDACTOR_PERSISTENCE_MODE", "none").strip().lower() or "none"),

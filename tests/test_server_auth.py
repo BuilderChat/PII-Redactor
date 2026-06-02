@@ -15,6 +15,7 @@ _AUTH_ENV_KEYS = (
     "PII_REDACTOR_USE_GLINER",
     "PII_REDACTOR_PERSISTENCE_MODE",
     "PII_REDACTOR_REQUIRE_PERSISTENCE",
+    "PII_REDACTOR_PERSISTENCE_RECOVERY_COOLDOWN_SECONDS",
 )
 
 
@@ -68,3 +69,44 @@ def test_api_key_guard_rejects_invalid_and_accepts_valid_key(monkeypatch) -> Non
         raise AssertionError("Expected invalid key to be rejected")
 
     server._validate_api_key("unit-test-key")
+
+
+def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
+    server = _load_server(monkeypatch, PII_REDACTOR_REQUIRE_API_KEY="false")
+
+    class _FakeMiddleware:
+        active_sessions = 2
+        detector_status = {
+            "presidio_enabled": True,
+            "gliner_enabled": True,
+            "name_detection_mode": "gliner",
+            "gliner_model": "urchade/gliner_multi_pii-v1",
+            "persistence_enabled": True,
+            "persistence_mode": "internal:supabase",
+            "persistence_status": "blocking",
+            "persistence_block_on_error": True,
+            "persistence_healthy": False,
+            "persistence_last_error_type": "TimeoutError",
+            "persistence_last_error_operation": "save",
+            "persistence_last_error_at": "2026-06-02T12:00:00Z",
+            "persistence_last_success_at": "2026-06-02T11:59:00Z",
+            "persistence_consecutive_failures": 3,
+            "persistence_recovery_attempts": 1,
+            "persistence_last_recovery_attempt_at": "2026-06-02T12:00:30Z",
+            "persistence_recovery_cooldown_seconds": 30,
+            "persistence_queue_depth": 4,
+            "scope_ttl_seconds": 3600,
+            "max_active_scopes": 15,
+            "allowlist_cache_enabled": True,
+        }
+
+    server.middleware = _FakeMiddleware()
+
+    response = server.health()
+
+    assert response.status == "degraded"
+    assert response.persistence_status == "blocking"
+    assert response.persistence_block_on_error is True
+    assert response.persistence_last_error_type == "TimeoutError"
+    assert response.persistence_last_error_operation == "save"
+    assert response.persistence_recovery_attempts == 1

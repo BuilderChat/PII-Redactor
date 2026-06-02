@@ -31,6 +31,7 @@ def _settings(**overrides: object) -> Settings:
         max_active_scopes=15,
         persistence_queue_max=1024,
         persistence_block_on_error=True,
+        persistence_recovery_cooldown_seconds=30,
         persistence_key_version="v1",
         require_persistence=False,
         persistence_mode="none",

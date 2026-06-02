@@ -16,6 +16,41 @@ def _scope(label: str) -> ScopeContext:
     )
 
 
+class _FlakySaveStore:
+    def __init__(self) -> None:
+        self._snapshots: dict[str, dict[str, object]] = {}
+        self.save_calls = 0
+
+    def load(self, scope: ScopeContext) -> dict[str, object] | None:
+        return self._snapshots.get(scope.key())
+
+    def save(
+        self,
+        scope: ScopeContext,
+        snapshot: dict[str, object],
+        *,
+        expires_at_epoch: float,
+        key_version: str,
+    ) -> None:
+        del expires_at_epoch, key_version
+        self.save_calls += 1
+        if self.save_calls == 1:
+            raise TimeoutError("temporary supabase timeout")
+        self._snapshots[scope.key()] = dict(snapshot)
+
+    def delete(self, scope: ScopeContext) -> None:
+        self._snapshots.pop(scope.key(), None)
+
+
+def _wait_for(predicate, *, timeout: float = 3.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
 def test_rehydrate_missing_scope_fail_open_returns_passthrough() -> None:
     middleware = PIIMiddleware()
     result = middleware.process_outbound(_scope("missing"), "Hello <fn_1>", fail_closed=False)
@@ -60,3 +95,28 @@ def test_ttl_prunes_in_memory_scope() -> None:
     with middleware._lock:  # type: ignore[attr-defined]
         middleware._vaults[key].last_access_epoch = time.time() - 7200  # type: ignore[attr-defined]
     assert middleware.active_sessions == 0
+
+
+def test_persistence_writer_recovers_without_restart() -> None:
+    scope = _scope("recover")
+    store = _FlakySaveStore()
+    middleware = PIIMiddleware(
+        vault_store=store,
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+        persistence_recovery_cooldown_seconds=1,
+    )
+
+    first = middleware.process_inbound(scope, "My name is Alice Jones", fail_closed=True)
+    assert first.redacted_text != "My name is Alice Jones"
+    assert _wait_for(lambda: middleware.detector_status["persistence_healthy"] is False)
+
+    time.sleep(1.05)
+    second = middleware.process_inbound(scope, "My email is alice@example.com", fail_closed=True)
+
+    assert second.redacted_text != "My email is alice@example.com"
+    assert middleware.detector_status["persistence_healthy"] is True
+    assert middleware.detector_status["persistence_recovery_attempts"] == 1
+    assert middleware.detector_status["persistence_last_error_type"] == "TimeoutError"
+    assert middleware.detector_status["persistence_last_error_operation"] == "save"
+    assert store.save_calls >= 2

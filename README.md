@@ -129,6 +129,7 @@ Required scope fields on every request:
 - Server default is `fail-closed` (`PII_REDACTOR_FAIL_CLOSED_DEFAULT=true`).
 - In `fail-closed` mode, unavailable redaction/rehydration returns HTTP `503`.
 - In `fail-open` mode, service returns passthrough text.
+- Persistence write failures are retried with cooldown-based recovery before the service stays blocked.
 
 ### Memory + Persistence Behavior
 
@@ -241,8 +242,15 @@ Multi-instance mode (recommended for scale):
 - Use a shared persistence backend so any instance can rehydrate.
 - Keep `thread_id` stable per conversation.
 - Monitor `/health` fields:
+  - `status`
+  - `persistence_status`
   - `persistence_enabled`
   - `persistence_healthy`
+  - `persistence_last_error_type`
+  - `persistence_last_error_operation`
+  - `persistence_last_error_at`
+  - `persistence_last_success_at`
+  - `persistence_recovery_attempts`
   - `persistence_queue_depth`
 
 ## Name Tuning Hooks
@@ -293,6 +301,7 @@ PII_REDACTOR_PERSISTENCE_MODE=internal
 PII_REDACTOR_INTERNAL_STORE_IMPL=supabase
 PII_REDACTOR_REQUIRE_PERSISTENCE=true
 PII_REDACTOR_PERSISTENCE_BLOCK_ON_ERROR=true
+PII_REDACTOR_PERSISTENCE_RECOVERY_COOLDOWN_SECONDS=30
 PII_REDACTOR_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 PII_REDACTOR_SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 PII_REDACTOR_SUPABASE_TABLE=pii_vault_snapshots
@@ -303,7 +312,7 @@ PII_REDACTOR_PERSISTENCE_KEY_VERSION=v1
 ## Notes
 
 - `PII-redactor-plan.v2.md` is preserved as the planning reference.
-- Runtime health endpoint includes detector status so you can verify if Presidio/GLiNER loaded.
+- Runtime health endpoint includes detector status and persistence diagnostics so you can verify detector load and persistence recovery state.
 - If Presidio/GLiNER dependencies or models are unavailable and `PII_REDACTOR_REQUIRE_*` flags are `false`, the engine falls back to regex/heuristics.
 - If `PII_REDACTOR_REQUIRE_GLINER=true` or `PII_REDACTOR_REQUIRE_PRESIDIO=true`, startup fails if the required detector is unavailable.
 - For strict air-gap mode, keep:

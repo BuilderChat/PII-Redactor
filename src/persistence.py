@@ -178,7 +178,7 @@ class SupabaseVaultStore:
             "limit": "1",
         }
         endpoint = f"{self._rest_url()}?{urlparse.urlencode(params)}"
-        response = self._request("GET", endpoint)
+        response = self._request("GET", endpoint, operation="load")
         if not isinstance(response, list) or not response:
             return None
         row = response[0]
@@ -228,6 +228,7 @@ class SupabaseVaultStore:
         self._request(
             "POST",
             endpoint,
+            operation="save",
             body=body,
             prefer_headers=("resolution=merge-duplicates", "return=minimal"),
         )
@@ -237,7 +238,7 @@ class SupabaseVaultStore:
             "scope_key": f"eq.{scope.key()}",
         }
         endpoint = f"{self._rest_url()}?{urlparse.urlencode(params)}"
-        self._request("DELETE", endpoint, prefer_headers=("return=minimal",))
+        self._request("DELETE", endpoint, operation="delete", prefer_headers=("return=minimal",))
 
     def _rest_url(self) -> str:
         encoded_table = urlparse.quote(self._table, safe="")
@@ -248,6 +249,7 @@ class SupabaseVaultStore:
         method: str,
         url: str,
         *,
+        operation: str,
         body: object | None = None,
         prefer_headers: tuple[str, ...] = (),
     ) -> object:
@@ -272,9 +274,13 @@ class SupabaseVaultStore:
                 return json.loads(raw.decode("utf-8"))
         except urlerror.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise PersistenceConfigError(f"Supabase request failed ({exc.code}): {detail}") from exc
+            raise PersistenceConfigError(
+                f"Supabase {operation} failed for table '{self._table}' ({exc.code}): {detail}"
+            ) from exc
         except urlerror.URLError as exc:
-            raise PersistenceConfigError(f"Supabase request failed: {exc}") from exc
+            raise PersistenceConfigError(
+                f"Supabase {operation} failed for table '{self._table}': {exc}"
+            ) from exc
 
 
 def build_vault_store(

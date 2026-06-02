@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 from queue import Empty, Full, Queue
 from threading import Event, RLock, Thread
@@ -38,13 +39,52 @@ class _PersistTask:
     key_version: str = "v1"
 
 
+@dataclass(frozen=True, slots=True)
+class _PersistenceStateSnapshot:
+    healthy: bool
+    last_error: str | None
+    last_error_type: str | None
+    last_error_operation: str | None
+    last_error_at_epoch: float | None
+    last_success_at_epoch: float | None
+    consecutive_failures: int
+    recovery_attempts: int
+    last_recovery_attempt_at_epoch: float | None
+    recovery_cooldown_seconds: int
+
+
+def _epoch_to_iso8601(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 class _AsyncPersistenceWriter:
-    def __init__(self, store: VaultStore, max_queue_size: int) -> None:
+    def __init__(
+        self,
+        store: VaultStore,
+        *,
+        max_queue_size: int,
+        persistence_mode: str,
+        recovery_cooldown_seconds: int,
+    ) -> None:
         self._store = store
         self._queue: Queue[_PersistTask] = Queue(maxsize=max_queue_size)
         self._stop_event = Event()
         self._thread = Thread(target=self._run, name="pii-persist-writer", daemon=True)
+        self._state_lock = RLock()
+        self._persistence_mode = persistence_mode
+        self._recovery_cooldown_seconds = max(1, int(recovery_cooldown_seconds))
+        self._current_error: str | None = None
         self._last_error: str | None = None
+        self._last_error_type: str | None = None
+        self._last_error_operation: str | None = None
+        self._last_error_at_epoch: float | None = None
+        self._last_success_at_epoch: float | None = None
+        self._consecutive_failures = 0
+        self._recovery_attempts = 0
+        self._last_recovery_attempt_at_epoch: float | None = None
+        self._last_failed_task: _PersistTask | None = None
         self._thread.start()
 
     def enqueue_save(
@@ -78,7 +118,8 @@ class _AsyncPersistenceWriter:
 
     @property
     def last_error(self) -> str | None:
-        return self._last_error
+        with self._state_lock:
+            return self._last_error
 
     @property
     def queue_depth(self) -> int:
@@ -86,7 +127,77 @@ class _AsyncPersistenceWriter:
 
     @property
     def healthy(self) -> bool:
-        return self._last_error is None
+        with self._state_lock:
+            return self._current_error is None
+
+    def status_snapshot(self) -> _PersistenceStateSnapshot:
+        with self._state_lock:
+            return _PersistenceStateSnapshot(
+                healthy=self._current_error is None,
+                last_error=self._last_error,
+                last_error_type=self._last_error_type,
+                last_error_operation=self._last_error_operation,
+                last_error_at_epoch=self._last_error_at_epoch,
+                last_success_at_epoch=self._last_success_at_epoch,
+                consecutive_failures=self._consecutive_failures,
+                recovery_attempts=self._recovery_attempts,
+                last_recovery_attempt_at_epoch=self._last_recovery_attempt_at_epoch,
+                recovery_cooldown_seconds=self._recovery_cooldown_seconds,
+            )
+
+    def maybe_recover(self) -> bool:
+        with self._state_lock:
+            if self._current_error is None:
+                return True
+
+            now = time.time()
+            if self._last_recovery_attempt_at_epoch is not None:
+                elapsed = now - self._last_recovery_attempt_at_epoch
+                if elapsed < self._recovery_cooldown_seconds:
+                    return False
+
+            task = self._last_failed_task
+            if task is None:
+                return False
+
+            self._recovery_attempts += 1
+            attempt = self._recovery_attempts
+            self._last_recovery_attempt_at_epoch = now
+
+        LOGGER.info(
+            "persistence_recovery_start mode=%s op=%s scope=%s attempt=%s queue_depth=%s",
+            self._persistence_mode,
+            task.op,
+            task.scope.key(),
+            attempt,
+            self.queue_depth,
+        )
+        try:
+            self._execute_task(task)
+        except Exception as exc:  # pragma: no cover - depends on external store behavior
+            self._record_failure(task, exc)
+            LOGGER.warning(
+                "persistence_recovery_failure mode=%s op=%s scope=%s attempt=%s queue_depth=%s error_type=%s error=%s",
+                self._persistence_mode,
+                task.op,
+                task.scope.key(),
+                attempt,
+                self.queue_depth,
+                self._error_type(exc),
+                exc,
+            )
+            return False
+
+        self._record_success(task)
+        LOGGER.info(
+            "persistence_recovery_success mode=%s op=%s scope=%s attempt=%s queue_depth=%s",
+            self._persistence_mode,
+            task.op,
+            task.scope.key(),
+            attempt,
+            self.queue_depth,
+        )
+        return True
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -96,22 +207,75 @@ class _AsyncPersistenceWriter:
                 continue
 
             try:
-                if task.op == "save":
-                    assert task.snapshot is not None
-                    assert task.expires_at_epoch is not None
-                    self._store.save(
-                        task.scope,
-                        task.snapshot,
-                        expires_at_epoch=task.expires_at_epoch,
-                        key_version=task.key_version,
-                    )
-                elif task.op == "delete":
-                    self._store.delete(task.scope)
-                self._last_error = None
+                self._execute_task(task)
+                self._record_success(task)
             except Exception as exc:  # pragma: no cover - depends on external store behavior
-                self._last_error = str(exc)
+                self._record_failure(task, exc)
             finally:
                 self._queue.task_done()
+
+    def _execute_task(self, task: _PersistTask) -> None:
+        if task.op == "save":
+            assert task.snapshot is not None
+            assert task.expires_at_epoch is not None
+            self._store.save(
+                task.scope,
+                task.snapshot,
+                expires_at_epoch=task.expires_at_epoch,
+                key_version=task.key_version,
+            )
+            return
+        if task.op == "delete":
+            self._store.delete(task.scope)
+            return
+        raise RuntimeError(f"Unsupported persistence operation '{task.op}'")
+
+    def _record_success(self, task: _PersistTask) -> None:
+        recovered = False
+        now = time.time()
+        with self._state_lock:
+            recovered = self._current_error is not None
+            self._current_error = None
+            self._last_success_at_epoch = now
+            self._consecutive_failures = 0
+            self._last_failed_task = None
+        if recovered:
+            LOGGER.info(
+                "persistence_recovered mode=%s op=%s scope=%s queue_depth=%s",
+                self._persistence_mode,
+                task.op,
+                task.scope.key(),
+                self.queue_depth,
+            )
+
+    def _record_failure(self, task: _PersistTask, exc: Exception) -> None:
+        message = str(exc)
+        error_type = self._error_type(exc)
+        now = time.time()
+        with self._state_lock:
+            self._current_error = message
+            self._last_error = message
+            self._last_error_type = error_type
+            self._last_error_operation = task.op
+            self._last_error_at_epoch = now
+            self._consecutive_failures += 1
+            self._last_failed_task = task
+            consecutive_failures = self._consecutive_failures
+        LOGGER.warning(
+            "persistence_task_failure mode=%s op=%s scope=%s queue_depth=%s consecutive_failures=%s error_type=%s error=%s",
+            self._persistence_mode,
+            task.op,
+            task.scope.key(),
+            self.queue_depth,
+            consecutive_failures,
+            error_type,
+            message,
+        )
+
+    @staticmethod
+    def _error_type(exc: Exception) -> str:
+        root = exc.__cause__ or exc.__context__ or exc
+        return type(root).__name__
 
 
 class PIIMiddleware:
@@ -127,6 +291,7 @@ class PIIMiddleware:
         max_active_scopes: int | None = None,
         persistence_queue_max: int | None = None,
         persistence_block_on_error: bool | None = None,
+        persistence_recovery_cooldown_seconds: int | None = None,
         persistence_key_version: str | None = None,
         allowlist_cache: LocalAllowlistCache | None = None,
     ) -> None:
@@ -149,11 +314,25 @@ class PIIMiddleware:
             if persistence_block_on_error is None
             else bool(persistence_block_on_error)
         )
+        self._persistence_recovery_cooldown_seconds = (
+            settings.persistence_recovery_cooldown_seconds
+            if persistence_recovery_cooldown_seconds is None
+            else max(1, int(persistence_recovery_cooldown_seconds))
+        )
         self._persistence_key_version = (
             settings.persistence_key_version if persistence_key_version is None else persistence_key_version
         )
         queue_max = settings.persistence_queue_max if persistence_queue_max is None else max(1, int(persistence_queue_max))
-        self._writer = _AsyncPersistenceWriter(vault_store, max_queue_size=queue_max) if vault_store else None
+        self._writer = (
+            _AsyncPersistenceWriter(
+                vault_store,
+                max_queue_size=queue_max,
+                persistence_mode=self._persistence_mode,
+                recovery_cooldown_seconds=self._persistence_recovery_cooldown_seconds,
+            )
+            if vault_store
+            else None
+        )
         self._allowlist_cache = allowlist_cache
 
     @property
@@ -165,13 +344,46 @@ class PIIMiddleware:
 
     @property
     def detector_status(self) -> dict[str, object]:
+        writer_status = self._writer.status_snapshot() if self._writer is not None else None
+        if self._store is None:
+            persistence_status = "disabled"
+        elif writer_status is None or writer_status.healthy:
+            persistence_status = "healthy"
+        elif self._persistence_block_on_error:
+            persistence_status = "blocking"
+        else:
+            persistence_status = "degraded"
         status = dict(self.engine.runtime_info)
         status.update(
             {
                 "persistence_enabled": self._store is not None,
                 "persistence_mode": self._persistence_mode,
-                "persistence_healthy": self._writer.healthy if self._writer is not None else True,
-                "persistence_last_error": self._writer.last_error if self._writer is not None else "",
+                "persistence_status": persistence_status,
+                "persistence_block_on_error": self._persistence_block_on_error,
+                "persistence_healthy": writer_status.healthy if writer_status is not None else True,
+                "persistence_last_error": writer_status.last_error if writer_status is not None else "",
+                "persistence_last_error_type": writer_status.last_error_type if writer_status is not None else "",
+                "persistence_last_error_operation": (
+                    writer_status.last_error_operation if writer_status is not None else ""
+                ),
+                "persistence_last_error_at": (
+                    _epoch_to_iso8601(writer_status.last_error_at_epoch) if writer_status is not None else None
+                ),
+                "persistence_last_success_at": (
+                    _epoch_to_iso8601(writer_status.last_success_at_epoch) if writer_status is not None else None
+                ),
+                "persistence_consecutive_failures": (
+                    writer_status.consecutive_failures if writer_status is not None else 0
+                ),
+                "persistence_recovery_attempts": writer_status.recovery_attempts if writer_status is not None else 0,
+                "persistence_last_recovery_attempt_at": (
+                    _epoch_to_iso8601(writer_status.last_recovery_attempt_at_epoch) if writer_status is not None else None
+                ),
+                "persistence_recovery_cooldown_seconds": (
+                    writer_status.recovery_cooldown_seconds
+                    if writer_status is not None
+                    else self._persistence_recovery_cooldown_seconds
+                ),
                 "persistence_queue_depth": self._writer.queue_depth if self._writer is not None else 0,
                 "scope_ttl_seconds": self._vault_ttl_seconds,
                 "max_active_scopes": self._max_active_scopes,
@@ -372,6 +584,8 @@ class PIIMiddleware:
     def _ensure_persistence_healthy(self) -> None:
         if self._writer is None:
             return
+        if self._persistence_block_on_error and not self._writer.healthy:
+            self._writer.maybe_recover()
         if self._persistence_block_on_error and not self._writer.healthy:
             raise PersistenceUnavailableError("Persistence layer unhealthy")
 
