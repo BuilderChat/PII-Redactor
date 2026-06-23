@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import logging
@@ -40,6 +40,7 @@ class _PersistTask:
     snapshot: dict[str, object] | None = None
     expires_at_epoch: float | None = None
     key_version: str = "v1"
+    enqueued_at_epoch: float = field(default_factory=time.time)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +75,40 @@ def _scope_hash(scope: ScopeContext) -> str:
     return hashlib.sha256(scope.key().encode("utf-8")).hexdigest()[:16]
 
 
+class _RuntimeMetrics:
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._data: dict[str, dict[str, float]] = {}
+
+    def record(self, name: str, elapsed_seconds: float) -> None:
+        elapsed_ms = max(0.0, elapsed_seconds * 1000.0)
+        with self._lock:
+            item = self._data.setdefault(
+                name,
+                {
+                    "count": 0.0,
+                    "total_ms": 0.0,
+                    "max_ms": 0.0,
+                    "last_ms": 0.0,
+                },
+            )
+            item["count"] += 1.0
+            item["total_ms"] += elapsed_ms
+            item["max_ms"] = max(item["max_ms"], elapsed_ms)
+            item["last_ms"] = elapsed_ms
+
+    def snapshot(self) -> dict[str, int | float]:
+        with self._lock:
+            result: dict[str, int | float] = {}
+            for name, item in sorted(self._data.items()):
+                count = int(item["count"])
+                result[f"{name}_count"] = count
+                result[f"{name}_avg_ms"] = round(item["total_ms"] / count, 2) if count else 0.0
+                result[f"{name}_max_ms"] = round(item["max_ms"], 2)
+                result[f"{name}_last_ms"] = round(item["last_ms"], 2)
+            return result
+
+
 class _AsyncPersistenceWriter:
     def __init__(
         self,
@@ -82,8 +117,10 @@ class _AsyncPersistenceWriter:
         max_queue_size: int,
         persistence_mode: str,
         recovery_cooldown_seconds: int,
+        metrics: _RuntimeMetrics | None = None,
     ) -> None:
         self._store = store
+        self._metrics = metrics
         self._queue: Queue[_PersistTask] = Queue(maxsize=max_queue_size)
         self._stop_event = Event()
         self._state_lock = RLock()
@@ -267,12 +304,27 @@ class _AsyncPersistenceWriter:
             except Empty:
                 continue
 
+            queue_lag_seconds = max(0.0, time.time() - task.enqueued_at_epoch)
+            task_start = time.perf_counter()
             try:
                 self._execute_task(task)
                 self._record_success(task)
             except Exception as exc:  # pragma: no cover - depends on external store behavior
                 self._record_failure(task, exc)
             finally:
+                elapsed_seconds = time.perf_counter() - task_start
+                if self._metrics is not None:
+                    self._metrics.record("persistence_queue_lag", queue_lag_seconds)
+                    self._metrics.record(f"persistence_{task.op}", elapsed_seconds)
+                LOGGER.info(
+                    "persistence_task_timing mode=%s op=%s scope_hash=%s duration_ms=%.2f queue_lag_ms=%.2f queue_depth=%s",
+                    self._persistence_mode,
+                    task.op,
+                    _scope_hash(task.scope),
+                    elapsed_seconds * 1000.0,
+                    queue_lag_seconds * 1000.0,
+                    self.queue_depth,
+                )
                 self._queue.task_done()
 
     def _execute_task(self, task: _PersistTask) -> None:
@@ -421,6 +473,7 @@ class PIIMiddleware:
     ) -> None:
         settings = get_settings()
         self.engine = engine or PIIEngine()
+        self._metrics = _RuntimeMetrics()
         self._lock = RLock()
         self._vaults: OrderedDict[str, _VaultEntry] = OrderedDict()
         self._store = vault_store
@@ -453,6 +506,7 @@ class PIIMiddleware:
                 max_queue_size=queue_max,
                 persistence_mode=self._persistence_mode,
                 recovery_cooldown_seconds=self._persistence_recovery_cooldown_seconds,
+                metrics=self._metrics,
             )
             if vault_store
             else None
@@ -537,6 +591,7 @@ class PIIMiddleware:
                     else self._persistence_recovery_cooldown_seconds
                 ),
                 "persistence_queue_depth": self._writer.queue_depth if self._writer is not None else 0,
+                "performance_metrics": self._metrics.snapshot(),
                 "scope_ttl_seconds": self._vault_ttl_seconds,
                 "max_active_scopes": self._max_active_scopes,
                 "allowlist_cache_enabled": self._allowlist_cache is not None,
@@ -554,8 +609,15 @@ class PIIMiddleware:
         fail_closed: bool = True,
     ) -> RedactionResult:
         LOGGER.info("redact_start scope=%s", scope.key())
+        started = time.perf_counter()
+        gate_seconds = 0.0
+        detector_seconds = 0.0
+        enqueue_seconds = 0.0
         try:
+            gate_started = time.perf_counter()
             self._ensure_persistence_healthy()
+            gate_seconds = time.perf_counter() - gate_started
+            self._metrics.record("redact_persistence_gate", gate_seconds)
             vault = self._get_or_create_vault(scope, fail_closed=fail_closed)
             if new_user:
                 vault.advance_profile()
@@ -566,21 +628,48 @@ class PIIMiddleware:
                     merged = set(combined_allowlist)
                     merged.update(cached_terms)
                     combined_allowlist = sorted(merged)
+            detector_started = time.perf_counter()
             result = self.engine.redact(
                 raw_user_message,
                 vault,
                 previous_assistant_message=previous_assistant_message,
                 non_name_allowlist=combined_allowlist,
             )
+            detector_seconds = time.perf_counter() - detector_started
+            self._metrics.record("redact_detector", detector_seconds)
+            enqueue_started = time.perf_counter()
             self._persist_snapshot(scope, vault, fail_closed=fail_closed)
+            enqueue_seconds = time.perf_counter() - enqueue_started
+            self._metrics.record("redact_persist_enqueue", enqueue_seconds)
+            total_seconds = time.perf_counter() - started
+            self._metrics.record("redact_total", total_seconds)
             LOGGER.info(
                 "redact_success scope=%s profile=%s replacements=%s",
                 scope.key(),
                 result.active_profile,
                 len(result.replacements),
             )
+            LOGGER.info(
+                "redact_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f detector_ms=%.2f persist_enqueue_ms=%.2f queue_depth=%s",
+                _scope_hash(scope),
+                total_seconds * 1000.0,
+                gate_seconds * 1000.0,
+                detector_seconds * 1000.0,
+                enqueue_seconds * 1000.0,
+                self._writer.queue_depth if self._writer is not None else 0,
+            )
             return result
         except Exception as exc:
+            total_seconds = time.perf_counter() - started
+            self._metrics.record("redact_failure_total", total_seconds)
+            LOGGER.info(
+                "redact_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f detector_ms=%.2f persist_enqueue_ms=%.2f status=failure",
+                _scope_hash(scope),
+                total_seconds * 1000.0,
+                gate_seconds * 1000.0,
+                detector_seconds * 1000.0,
+                enqueue_seconds * 1000.0,
+            )
             LOGGER.warning("redact_failure scope=%s fail_closed=%s error=%s", scope.key(), fail_closed, exc)
             if fail_closed:
                 raise
@@ -594,25 +683,61 @@ class PIIMiddleware:
         fail_closed: bool = True,
     ) -> RehydrationResult:
         LOGGER.info("rehydrate_start scope=%s", scope.key())
+        started = time.perf_counter()
+        gate_seconds = 0.0
+        rehydrate_seconds = 0.0
         try:
+            gate_started = time.perf_counter()
             self._ensure_persistence_healthy()
+            gate_seconds = time.perf_counter() - gate_started
+            self._metrics.record("rehydrate_persistence_gate", gate_seconds)
             vault = self._get_vault(scope, fail_closed=fail_closed, allow_store_load=True)
             if vault is None:
                 if fail_closed:
                     raise PersistenceUnavailableError("Vault not found for scoped rehydration")
+                total_seconds = time.perf_counter() - started
+                self._metrics.record("rehydrate_total", total_seconds)
+                LOGGER.info(
+                    "rehydrate_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f rehydrate_ms=0.00 status=missing_vault_fail_open",
+                    _scope_hash(scope),
+                    total_seconds * 1000.0,
+                    gate_seconds * 1000.0,
+                )
                 return RehydrationResult(
                     clean_text=llm_response,
                     repaired_text=llm_response,
                     repaired_placeholders=False,
                 )
+            rehydrate_started = time.perf_counter()
             result = self.engine.rehydrate(llm_response, vault)
+            rehydrate_seconds = time.perf_counter() - rehydrate_started
+            self._metrics.record("rehydrate_engine", rehydrate_seconds)
+            total_seconds = time.perf_counter() - started
+            self._metrics.record("rehydrate_total", total_seconds)
             LOGGER.info(
                 "rehydrate_success scope=%s repaired_placeholders=%s",
                 scope.key(),
                 result.repaired_placeholders,
             )
+            LOGGER.info(
+                "rehydrate_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f rehydrate_ms=%.2f queue_depth=%s",
+                _scope_hash(scope),
+                total_seconds * 1000.0,
+                gate_seconds * 1000.0,
+                rehydrate_seconds * 1000.0,
+                self._writer.queue_depth if self._writer is not None else 0,
+            )
             return result
         except Exception as exc:
+            total_seconds = time.perf_counter() - started
+            self._metrics.record("rehydrate_failure_total", total_seconds)
+            LOGGER.info(
+                "rehydrate_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f rehydrate_ms=%.2f status=failure",
+                _scope_hash(scope),
+                total_seconds * 1000.0,
+                gate_seconds * 1000.0,
+                rehydrate_seconds * 1000.0,
+            )
             LOGGER.warning("rehydrate_failure scope=%s fail_closed=%s error=%s", scope.key(), fail_closed, exc)
             if fail_closed:
                 raise
@@ -656,7 +781,7 @@ class PIIMiddleware:
         loaded_vault: PIIVault | None = None
         if self._store is not None:
             try:
-                snapshot = self._store.load(scope)
+                snapshot = self._load_snapshot(scope, operation="redact_load")
                 if snapshot:
                     loaded_vault = PIIVault.from_snapshot(snapshot)
             except Exception:
@@ -701,7 +826,7 @@ class PIIMiddleware:
             return None
 
         try:
-            snapshot = self._store.load(scope)
+            snapshot = self._load_snapshot(scope, operation="rehydrate_load")
         except Exception:
             if fail_closed:
                 raise
@@ -718,6 +843,24 @@ class PIIMiddleware:
         self._cleanup_scope_entries(evicted)
         return vault
 
+    def _load_snapshot(self, scope: ScopeContext, *, operation: str) -> dict[str, object] | None:
+        if self._store is None:
+            return None
+        started = time.perf_counter()
+        try:
+            return self._store.load(scope)
+        finally:
+            elapsed_seconds = time.perf_counter() - started
+            self._metrics.record("persistence_load", elapsed_seconds)
+            self._metrics.record(f"persistence_{operation}", elapsed_seconds)
+            LOGGER.info(
+                "persistence_load_timing op=%s scope_hash=%s duration_ms=%.2f queue_depth=%s",
+                operation,
+                _scope_hash(scope),
+                elapsed_seconds * 1000.0,
+                self._writer.queue_depth if self._writer is not None else 0,
+            )
+
     def _persist_snapshot(self, scope: ScopeContext, vault: PIIVault, *, fail_closed: bool) -> None:
         if self._writer is None:
             return
@@ -730,6 +873,8 @@ class PIIMiddleware:
             expires_at_epoch=expires_at_epoch,
             key_version=self._persistence_key_version,
         )
+        if not queued:
+            self._metrics.record("persistence_enqueue_full", 0.0)
         if not queued and fail_closed:
             raise PersistenceUnavailableError("Persistence queue full while saving vault snapshot")
 

@@ -286,6 +286,7 @@ def health() -> HealthResponse:
             detector_status.get("persistence_recovery_cooldown_seconds", 0)
         ),
         persistence_queue_depth=int(detector_status.get("persistence_queue_depth", 0)),
+        performance_metrics=dict(detector_status.get("performance_metrics", {})),
         scope_ttl_seconds=int(detector_status.get("scope_ttl_seconds", 0)),
         max_active_scopes=int(detector_status.get("max_active_scopes", 0)),
         allowlist_cache_enabled=bool(detector_status.get("allowlist_cache_enabled")),

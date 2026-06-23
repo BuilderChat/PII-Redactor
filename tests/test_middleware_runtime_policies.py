@@ -173,6 +173,12 @@ def test_persistence_writer_recovers_without_restart() -> None:
     assert middleware.detector_status["persistence_last_error_type"] == "TimeoutError"
     assert middleware.detector_status["persistence_last_error_category"] == "transient"
     assert middleware.detector_status["persistence_last_error_operation"] == "save"
+    metrics = middleware.detector_status["performance_metrics"]
+    assert metrics["redact_total_count"] >= 2
+    assert metrics["redact_detector_count"] >= 2
+    assert metrics["persistence_load_count"] >= 1
+    assert metrics["persistence_save_count"] >= 1
+    assert metrics["persistence_queue_lag_count"] >= 1
     assert store.save_calls >= 2
 
 

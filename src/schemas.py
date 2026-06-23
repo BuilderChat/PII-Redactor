@@ -153,6 +153,7 @@ class HealthResponse(BaseModel):
     persistence_next_recovery_at: str | None = None
     persistence_recovery_cooldown_seconds: int = 0
     persistence_queue_depth: int
+    performance_metrics: dict[str, int | float] = Field(default_factory=dict)
     scope_ttl_seconds: int
     max_active_scopes: int
     allowlist_cache_enabled: bool

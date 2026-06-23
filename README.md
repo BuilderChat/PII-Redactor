@@ -260,6 +260,7 @@ Multi-instance mode (recommended for scale):
   - `persistence_recovery_attempts`
   - `persistence_next_recovery_at`
   - `persistence_queue_depth`
+  - `performance_metrics`
 
 ## Name Tuning Hooks
 

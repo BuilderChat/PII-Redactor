@@ -103,6 +103,12 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
             "persistence_next_recovery_at": "2026-06-02T12:01:00Z",
             "persistence_recovery_cooldown_seconds": 30,
             "persistence_queue_depth": 4,
+            "performance_metrics": {
+                "redact_total_count": 2,
+                "redact_total_avg_ms": 12.5,
+                "redact_total_max_ms": 20.0,
+                "redact_total_last_ms": 5.0,
+            },
             "scope_ttl_seconds": 3600,
             "max_active_scopes": 15,
             "allowlist_cache_enabled": True,
@@ -122,3 +128,4 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
     assert response.persistence_last_error_category == "transient"
     assert response.persistence_last_error_operation == "save"
     assert response.persistence_recovery_attempts == 1
+    assert response.performance_metrics["redact_total_count"] == 2
