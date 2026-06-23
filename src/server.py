@@ -207,7 +207,11 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
 def health() -> HealthResponse:
     detector_status = middleware.detector_status
     persistence_status = str(detector_status.get("persistence_status", "disabled"))
-    service_status = "degraded" if persistence_status in {"blocking", "degraded"} else "ok"
+    service_status = (
+        "ok"
+        if persistence_status in {"disabled", "healthy"}
+        else "degraded"
+    )
     return HealthResponse(
         status=service_status,
         active_sessions=middleware.active_sessions,
@@ -221,11 +225,29 @@ def health() -> HealthResponse:
         persistence_enabled=bool(detector_status.get("persistence_enabled")),
         persistence_mode=str(detector_status.get("persistence_mode", "none")),
         persistence_status=persistence_status,
+        persistence_state=str(detector_status.get("persistence_state", persistence_status)),
         persistence_block_on_error=bool(detector_status.get("persistence_block_on_error")),
         persistence_healthy=bool(detector_status.get("persistence_healthy")),
+        persistence_worker_alive=bool(detector_status.get("persistence_worker_alive", True)),
+        persistence_worker_restart_count=int(detector_status.get("persistence_worker_restart_count", 0)),
+        persistence_last_worker_restart_at=(
+            str(detector_status.get("persistence_last_worker_restart_at"))
+            if detector_status.get("persistence_last_worker_restart_at")
+            else None
+        ),
         persistence_last_error_type=(
             str(detector_status.get("persistence_last_error_type"))
             if detector_status.get("persistence_last_error_type")
+            else None
+        ),
+        persistence_last_error_category=(
+            str(detector_status.get("persistence_last_error_category"))
+            if detector_status.get("persistence_last_error_category")
+            else None
+        ),
+        persistence_last_error_status_code=(
+            int(detector_status.get("persistence_last_error_status_code"))
+            if detector_status.get("persistence_last_error_status_code") is not None
             else None
         ),
         persistence_last_error_operation=(
@@ -243,11 +265,21 @@ def health() -> HealthResponse:
             if detector_status.get("persistence_last_success_at")
             else None
         ),
+        persistence_unhealthy_since=(
+            str(detector_status.get("persistence_unhealthy_since"))
+            if detector_status.get("persistence_unhealthy_since")
+            else None
+        ),
         persistence_consecutive_failures=int(detector_status.get("persistence_consecutive_failures", 0)),
         persistence_recovery_attempts=int(detector_status.get("persistence_recovery_attempts", 0)),
         persistence_last_recovery_attempt_at=(
             str(detector_status.get("persistence_last_recovery_attempt_at"))
             if detector_status.get("persistence_last_recovery_attempt_at")
+            else None
+        ),
+        persistence_next_recovery_at=(
+            str(detector_status.get("persistence_next_recovery_at"))
+            if detector_status.get("persistence_next_recovery_at")
             else None
         ),
         persistence_recovery_cooldown_seconds=int(

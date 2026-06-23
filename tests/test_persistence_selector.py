@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 import sys
 import types
+from urllib import error as urlerror
 
 from src.config import Settings
-from src.persistence import MemoryVaultStore, PersistenceConfigError, build_vault_store
+from src.persistence import MemoryVaultStore, PersistenceConfigError, PersistenceRuntimeError, build_vault_store
+import src.persistence as persistence
 
 
 def _settings(**overrides: object) -> Settings:
@@ -132,3 +134,36 @@ def test_external_mode_factory_path_is_resolved() -> None:
 
     assert isinstance(store, MemoryVaultStore)
     assert mode == "external:factory"
+
+
+def test_supabase_runtime_error_classifies_http_status(monkeypatch) -> None:
+    store, _mode = build_vault_store(
+        _settings(
+            persistence_mode="internal",
+            internal_store_impl="supabase",
+            supabase_url="https://example.supabase.co",
+            supabase_service_role_key="service_role",
+            persistence_master_key="master_key",
+        )
+    )
+
+    def fail_urlopen(*_args, **_kwargs):
+        raise urlerror.HTTPError(
+            url="https://example.supabase.co/rest/v1/pii_vault_snapshots",
+            code=503,
+            msg="Service Unavailable",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr(persistence.urlrequest, "urlopen", fail_urlopen)
+
+    try:
+        store.delete(types.SimpleNamespace(key=lambda: "scope_key"))
+    except PersistenceRuntimeError as exc:
+        assert exc.operation == "delete"
+        assert exc.status_code == 503
+        assert exc.category == "transient"
+        assert "Service Unavailable" not in str(exc)
+        return
+    raise AssertionError("Expected PersistenceRuntimeError")

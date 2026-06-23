@@ -134,15 +134,23 @@ class HealthResponse(BaseModel):
     persistence_enabled: bool
     persistence_mode: str
     persistence_status: str
+    persistence_state: str
     persistence_block_on_error: bool
     persistence_healthy: bool
+    persistence_worker_alive: bool = True
+    persistence_worker_restart_count: int = 0
+    persistence_last_worker_restart_at: str | None = None
     persistence_last_error_type: str | None = None
+    persistence_last_error_category: str | None = None
+    persistence_last_error_status_code: int | None = None
     persistence_last_error_operation: str | None = None
     persistence_last_error_at: str | None = None
     persistence_last_success_at: str | None = None
+    persistence_unhealthy_since: str | None = None
     persistence_consecutive_failures: int = 0
     persistence_recovery_attempts: int = 0
     persistence_last_recovery_attempt_at: str | None = None
+    persistence_next_recovery_at: str | None = None
     persistence_recovery_cooldown_seconds: int = 0
     persistence_queue_depth: int
     scope_ttl_seconds: int

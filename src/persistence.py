@@ -21,6 +21,23 @@ class PersistenceConfigError(RuntimeError):
     """Raised when persistence mode/configuration is invalid."""
 
 
+class PersistenceRuntimeError(RuntimeError):
+    """Raised when a configured persistence backend fails at runtime."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        operation: str,
+        status_code: int | None = None,
+        category: str = "unknown",
+    ) -> None:
+        super().__init__(message)
+        self.operation = operation
+        self.status_code = status_code
+        self.category = category
+
+
 class VaultStore(Protocol):
     """Persistence contract for vault snapshots."""
 
@@ -273,14 +290,29 @@ class SupabaseVaultStore:
                     return None
                 return json.loads(raw.decode("utf-8"))
         except urlerror.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise PersistenceConfigError(
-                f"Supabase {operation} failed for table '{self._table}' ({exc.code}): {detail}"
+            exc.read()
+            raise PersistenceRuntimeError(
+                f"Supabase {operation} failed for table '{self._table}' ({exc.code})",
+                operation=operation,
+                status_code=exc.code,
+                category=_http_status_category(exc.code),
             ) from exc
         except urlerror.URLError as exc:
-            raise PersistenceConfigError(
-                f"Supabase {operation} failed for table '{self._table}': {exc}"
+            raise PersistenceRuntimeError(
+                f"Supabase {operation} failed for table '{self._table}' (transport)",
+                operation=operation,
+                category="transient",
             ) from exc
+
+
+def _http_status_category(status_code: int) -> str:
+    if status_code in {401, 403}:
+        return "auth"
+    if status_code in {400, 404, 409, 422}:
+        return "schema"
+    if status_code >= 500 or status_code in {408, 425, 429}:
+        return "transient"
+    return "backend"
 
 
 def build_vault_store(

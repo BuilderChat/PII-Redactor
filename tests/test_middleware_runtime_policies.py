@@ -3,6 +3,8 @@ from __future__ import annotations
 import time
 
 from src.middleware import PIIMiddleware, PersistenceUnavailableError
+from src.persistence import PersistenceRuntimeError
+from src.pii_engine import RedactionResult, RehydrationResult
 from src.types import ScopeContext
 
 
@@ -40,6 +42,56 @@ class _FlakySaveStore:
 
     def delete(self, scope: ScopeContext) -> None:
         self._snapshots.pop(scope.key(), None)
+
+
+class _AuthFailureStore:
+    def load(self, scope: ScopeContext) -> dict[str, object] | None:
+        del scope
+        return None
+
+    def save(
+        self,
+        scope: ScopeContext,
+        snapshot: dict[str, object],
+        *,
+        expires_at_epoch: float,
+        key_version: str,
+    ) -> None:
+        del scope, snapshot, expires_at_epoch, key_version
+        raise PersistenceRuntimeError(
+            "Supabase save failed for table 'pii_vault_snapshots' (403)",
+            operation="save",
+            status_code=403,
+            category="auth",
+        )
+
+    def delete(self, scope: ScopeContext) -> None:
+        del scope
+
+
+class _FakeEngine:
+    runtime_info = {
+        "presidio_enabled": False,
+        "gliner_enabled": False,
+        "name_detection_mode": "test",
+        "gliner_model": "",
+    }
+
+    def redact(self, raw_user_message, vault, **_kwargs) -> RedactionResult:
+        del vault
+        return RedactionResult(
+            redacted_text=f"redacted:{raw_user_message}",
+            replacements={},
+            active_profile=1,
+        )
+
+    def rehydrate(self, llm_response, vault) -> RehydrationResult:
+        del vault
+        return RehydrationResult(
+            clean_text=f"clean:{llm_response}",
+            repaired_text=llm_response,
+            repaired_placeholders=False,
+        )
 
 
 def _wait_for(predicate, *, timeout: float = 3.0) -> bool:
@@ -101,6 +153,7 @@ def test_persistence_writer_recovers_without_restart() -> None:
     scope = _scope("recover")
     store = _FlakySaveStore()
     middleware = PIIMiddleware(
+        engine=_FakeEngine(),
         vault_store=store,
         persistence_mode="internal:supabase",
         persistence_block_on_error=True,
@@ -118,5 +171,55 @@ def test_persistence_writer_recovers_without_restart() -> None:
     assert middleware.detector_status["persistence_healthy"] is True
     assert middleware.detector_status["persistence_recovery_attempts"] == 1
     assert middleware.detector_status["persistence_last_error_type"] == "TimeoutError"
+    assert middleware.detector_status["persistence_last_error_category"] == "transient"
     assert middleware.detector_status["persistence_last_error_operation"] == "save"
     assert store.save_calls >= 2
+
+
+def test_persistence_auth_failure_reports_unavailable_state() -> None:
+    scope = _scope("auth_failure")
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=_AuthFailureStore(),
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+        persistence_recovery_cooldown_seconds=1,
+    )
+
+    middleware.process_inbound(scope, "My name is Alice Jones", fail_closed=True)
+    assert _wait_for(lambda: middleware.detector_status["persistence_healthy"] is False)
+
+    status = middleware.detector_status
+    assert status["persistence_status"] == "blocking"
+    assert status["persistence_state"] == "unavailable"
+    assert status["persistence_last_error_category"] == "auth"
+    assert status["persistence_last_error_status_code"] == 403
+    assert status["persistence_unhealthy_since"] is not None
+    assert status["persistence_next_recovery_at"] is None
+
+
+def test_persistence_worker_restarts_when_thread_is_dead() -> None:
+    store = _FlakySaveStore()
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=store,
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+    )
+
+    writer = middleware._writer  # type: ignore[attr-defined]
+    assert writer is not None
+    original_thread = writer._thread  # type: ignore[attr-defined]
+    writer._thread = type(  # type: ignore[attr-defined]
+        "DeadThread",
+        (),
+        {"is_alive": lambda self: False},
+    )()
+
+    status = middleware.detector_status
+
+    assert status["persistence_worker_alive"] is True
+    assert status["persistence_worker_restart_count"] == 1
+    assert status["persistence_last_worker_restart_at"] is not None
+    assert writer._thread is not original_thread  # type: ignore[attr-defined]
+    assert writer._thread.is_alive() is True  # type: ignore[attr-defined]

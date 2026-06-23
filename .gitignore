@@ -11,6 +11,7 @@ tests/fixtures/private/
 deferred_list.md
 notes.txt
 Dockerfile
+scripts/deploy_redactor_with_commit.sh
 
 # Distribution / packaging
 .Python

@@ -84,15 +84,23 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
             "persistence_enabled": True,
             "persistence_mode": "internal:supabase",
             "persistence_status": "blocking",
+            "persistence_state": "degraded",
             "persistence_block_on_error": True,
             "persistence_healthy": False,
+            "persistence_worker_alive": True,
+            "persistence_worker_restart_count": 2,
+            "persistence_last_worker_restart_at": "2026-06-02T12:00:15Z",
             "persistence_last_error_type": "TimeoutError",
+            "persistence_last_error_category": "transient",
+            "persistence_last_error_status_code": None,
             "persistence_last_error_operation": "save",
             "persistence_last_error_at": "2026-06-02T12:00:00Z",
             "persistence_last_success_at": "2026-06-02T11:59:00Z",
+            "persistence_unhealthy_since": "2026-06-02T12:00:00Z",
             "persistence_consecutive_failures": 3,
             "persistence_recovery_attempts": 1,
             "persistence_last_recovery_attempt_at": "2026-06-02T12:00:30Z",
+            "persistence_next_recovery_at": "2026-06-02T12:01:00Z",
             "persistence_recovery_cooldown_seconds": 30,
             "persistence_queue_depth": 4,
             "scope_ttl_seconds": 3600,
@@ -106,7 +114,11 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
 
     assert response.status == "degraded"
     assert response.persistence_status == "blocking"
+    assert response.persistence_state == "degraded"
     assert response.persistence_block_on_error is True
+    assert response.persistence_worker_alive is True
+    assert response.persistence_worker_restart_count == 2
     assert response.persistence_last_error_type == "TimeoutError"
+    assert response.persistence_last_error_category == "transient"
     assert response.persistence_last_error_operation == "save"
     assert response.persistence_recovery_attempts == 1

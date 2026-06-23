@@ -244,13 +244,21 @@ Multi-instance mode (recommended for scale):
 - Monitor `/health` fields:
   - `status`
   - `persistence_status`
+  - `persistence_state`
   - `persistence_enabled`
   - `persistence_healthy`
+  - `persistence_worker_alive`
+  - `persistence_worker_restart_count`
+  - `persistence_last_worker_restart_at`
   - `persistence_last_error_type`
+  - `persistence_last_error_category`
+  - `persistence_last_error_status_code`
   - `persistence_last_error_operation`
   - `persistence_last_error_at`
   - `persistence_last_success_at`
+  - `persistence_unhealthy_since`
   - `persistence_recovery_attempts`
+  - `persistence_next_recovery_at`
   - `persistence_queue_depth`
 
 ## Name Tuning Hooks
