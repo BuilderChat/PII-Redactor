@@ -156,6 +156,12 @@ def test_phone_with_plus_separators_is_detected() -> None:
     assert _redact("My phone is 803+747+6306") == "My phone is <ph_1>"
 
 
+def test_phone_with_slash_separators_is_detected() -> None:
+    assert _redact("phone also 510/459 9942") == "phone also <ph_1>"
+    assert _redact("phone also 1 510/459 9942") == "phone also <ph_1>"
+    assert _redact("phone also 1/510/459/9942") == "phone also <ph_1>"
+
+
 def test_repeat_detected_name_is_redacted_again_in_same_vault_thread() -> None:
     engine = PIIEngine(use_presidio=False, use_gliner=False)
     vault = PIIVault()
@@ -482,6 +488,21 @@ def test_signature_tail_name_in_parentheses_is_redacted() -> None:
     )
 
 
+def test_closing_signature_name_after_thank_you_is_redacted() -> None:
+    text = (
+        "Please have a representative reach out to us at 775-555-1212 or test@example.com "
+        "at your convenience. Thank you, Brent Jorgen"
+    )
+    assert _redact(text) == (
+        "Please have a representative reach out to us at <ph_1> or <em_1> "
+        "at your convenience. Thank you, <fn_1> <ln_1>"
+    )
+
+
+def test_closing_without_signature_name_is_not_redacted() -> None:
+    assert _redact("That will be all thank you") == "That will be all thank you"
+
+
 def test_form_labelled_name_line_is_redacted_deterministically() -> None:
     text = "Your name (first & last): Yash Bhimani"
     assert _redact(text) == "Your name (first & last): <fn_1> <ln_1>"
@@ -782,3 +803,23 @@ def test_my_name_is_with_middle_initial_and_contact_redacts_full_name() -> None:
 
 def test_lastname_is_initial_is_redacted() -> None:
     assert _redact("Lastname is A") == "Lastname is <ln_1>"
+
+
+def test_all_caps_incentives_typo_topic_phrase_is_not_redacted_as_name() -> None:
+    assert _redact("INCENTVES FIRST PLEASE") == "INCENTVES FIRST PLEASE"
+
+
+def test_all_caps_question_topic_phrase_is_not_redacted_as_name() -> None:
+    assert _redact("HOW ABOUT SUTTON", non_name_allowlist=["The Sutton"]) == "HOW ABOUT SUTTON"
+
+
+def test_all_caps_name_after_name_prompt_still_redacts() -> None:
+    assert _redact("JOHN SMITH", previous_assistant_message="What's your first and last name?") == "<fn_1> <ln_1>"
+
+
+def test_repeated_place_reply_from_available_homes_context_is_not_name() -> None:
+    prompt = (
+        "I hear you—Rushing Waters has beautiful patio homes, but pricing there runs higher. "
+        "Want me to show you move-in-ready patio homes under a specific price point in North Augusta or Grovetown instead?"
+    )
+    assert _redact("Rushing Waters", previous_assistant_message=prompt) == "Rushing Waters"

@@ -16,7 +16,7 @@ LOGGER = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PHONE_RE = re.compile(
-    r"(?<!\w)(?:\+?\d{1,3}[\s.\-+]*)?(?:\(?\d{3}\)?[\s.\-+]*)\d{3}[\s.\-+]*\d{4}(?!\w)"
+    r"(?<!\w)(?:\+?\d{1,3}[\s./\-+]*)?(?:\(?\d{3}\)?[\s./\-+]*)\d{3}[\s./\-+]*\d{4}(?!\w)"
 )
 NAME_WORD_PATTERN = r"[^\W\d_]+(?:['\-][^\W\d_]+)*"
 NAME_INTRO_RE = re.compile(
@@ -100,6 +100,13 @@ SIGNATURE_DELIMITED_NAME_RE = re.compile(
     rf"\s+(?P<last>{NAME_WORD_PATTERN})"
     rf"(?P<closing>\))?\s*$",
     re.UNICODE,
+)
+CLOSING_SIGNATURE_NAME_RE = re.compile(
+    rf"\b(?P<closing>thank\s+you|thanks|regards|sincerely|best)\s*,\s*"
+    rf"(?P<first>{NAME_WORD_PATTERN})"
+    rf"(?:\s+(?P<middle>[^\W\d_])\.?)?"
+    rf"\s+(?P<last>{NAME_WORD_PATTERN})\s*$",
+    re.IGNORECASE | re.UNICODE,
 )
 SIGNATURE_BROKERAGE_CUES = {
     "realtor",
@@ -264,6 +271,18 @@ ASSISTANT_LOCATION_CONTEXT_CUES = (
     "where are you looking",
     "show you what we're building nearby",
 )
+ASSISTANT_PLACE_REPLY_CONTEXT_CUES = (
+    "available homes",
+    "move-in-ready",
+    "move in ready",
+    "patio homes",
+    "specific price point",
+    "service area",
+    "community",
+    "communities",
+    "location",
+    "area",
+)
 FLOOR_PLAN_CODE_TOKENS = {
     "fe",
     "se",
@@ -370,6 +389,7 @@ NON_NAME_SINGLE_WORDS = {
     "sales",
     "incentive",
     "incentives",
+    "incentves",
     "warranty",
     "prices",
     "pricing",
@@ -1010,6 +1030,7 @@ class PIIEngine:
             spans.extend(self._detect_contact_then_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_contact_with_parenthetical_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_signature_tail_name_spans(text, non_name_terms=runtime_non_name_terms))
+            spans.extend(self._detect_closing_signature_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_terminal_signature_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_realtor_pair_intro_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_affirmative_name_contact_spans(text, non_name_terms=runtime_non_name_terms))
@@ -1718,6 +1739,39 @@ class PIIEngine:
 
         return [Span(match.start("first"), match.end("last"), "name", f"{first} {last}")]
 
+    def _detect_closing_signature_name_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
+        match = CLOSING_SIGNATURE_NAME_RE.search(text)
+        if not match:
+            return []
+
+        prefix_text = text[: match.start()].strip()
+        if len(re.findall(NAME_WORD_PATTERN, prefix_text, flags=re.UNICODE)) < 4:
+            return []
+
+        first = match.group("first")
+        middle = match.group("middle")
+        last = match.group("last")
+        if not first[:1].isupper() or not last[:1].isupper():
+            return []
+
+        if any(self._is_blocked_name_token(token) for token in (first.lower(), last.lower())):
+            return []
+
+        full_value = f"{first} {middle} {last}" if middle else f"{first} {last}"
+        full_normalized = self._normalize_text_phrase(full_value)
+        if full_normalized in non_name_terms:
+            return []
+
+        lower_words = full_normalized.split()
+        if self._looks_like_location_non_name_phrase(lower_words, non_name_terms):
+            return []
+        if self._looks_like_geo_non_name_phrase(lower_words, non_name_terms):
+            return []
+        if self._looks_like_company_non_name_phrase(lower_words):
+            return []
+
+        return [Span(match.start("first"), match.end("last"), "name", full_value)]
+
     def _detect_terminal_signature_name_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
         match = SIGNATURE_DELIMITED_NAME_RE.search(text)
         if not match:
@@ -2336,6 +2390,10 @@ class PIIEngine:
         if len(words) > 1 and any(w in NON_NAME_MULTIWORD_COMPONENTS for w in lower_words):
             return False
 
+        if len(words) >= 2 and value.isupper() and lower_words[0] in PROMPTED_NAME_REPLY_NON_NAME_STARTERS:
+            if not (has_name_cue or assistant_requests_name):
+                return False
+
         if len(words) >= 2 and lower_words[0] in NON_NAME_SINGLE_WORDS and not (has_name_cue or assistant_requests_name):
             return False
         if (
@@ -2550,12 +2608,15 @@ class PIIEngine:
         if EMAIL_RE.search(text) or PHONE_RE.search(text):
             return False
 
-        is_plan_context, is_location_context = self._assistant_non_name_context(previous_assistant_message)
-        if not (is_plan_context or is_location_context):
-            return False
-
         words = re.findall(NAME_WORD_PATTERN, text, flags=re.UNICODE)
         if not words or len(words) > 5:
+            return False
+
+        if self._looks_like_repeated_place_reply(normalized_text, words, previous_assistant_message):
+            return True
+
+        is_plan_context, is_location_context = self._assistant_non_name_context(previous_assistant_message)
+        if not (is_plan_context or is_location_context):
             return False
 
         if normalized_text in non_name_terms:
@@ -2577,6 +2638,19 @@ class PIIEngine:
                 return True
 
         return False
+
+    @staticmethod
+    def _looks_like_repeated_place_reply(
+        normalized_text: str,
+        words: list[str],
+        previous_assistant_message: str | None,
+    ) -> bool:
+        if not previous_assistant_message or not (2 <= len(words) <= 4):
+            return False
+        normalized_previous = re.sub(r"\s+", " ", previous_assistant_message.strip().lower())
+        if normalized_text not in normalized_previous:
+            return False
+        return any(cue in normalized_previous for cue in ASSISTANT_PLACE_REPLY_CONTEXT_CUES)
 
     @staticmethod
     def _looks_like_assistant_greeting(text: str, non_name_terms: set[str]) -> bool:
