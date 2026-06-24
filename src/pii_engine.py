@@ -546,6 +546,18 @@ GEO_DIRECTION_WORDS = {
     "southwest",
 }
 LOCATION_CUE_PHRASES = (
+    "location",
+    "pricing",
+    "price",
+    "incentives",
+    "floor plan",
+    "floor plans",
+    "plans",
+    "move in ready",
+    "move-in ready",
+    "touring",
+    "tour",
+    "available homes",
     "near",
     "around",
     "close to",
@@ -560,6 +572,34 @@ LOCATION_CUE_PHRASES = (
     "southeast of",
     "southwest of",
 )
+PROMPTED_NAME_REPLY_NON_NAME_STARTERS = {
+    "when",
+    "why",
+    "what",
+    "where",
+    "who",
+    "how",
+    "can",
+    "could",
+    "would",
+    "will",
+    "should",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+}
+CONTACT_CHANNEL_LABEL_WORDS = {
+    "cell",
+    "mobile",
+    "phone",
+    "text",
+    "call",
+    "number",
+    "tel",
+    "telephone",
+}
 _US_STATE_ABBRS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
     "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
@@ -1207,6 +1247,8 @@ class PIIEngine:
         words = re.findall(NAME_WORD_PATTERN, working_text, flags=re.UNICODE)
         if self._is_blocked_name_token(normalized):
             return []
+        if normalized in PROMPTED_NAME_REPLY_NON_NAME_STARTERS:
+            return []
         first_word_in_non_name_terms = self._normalize_text_phrase(value) in non_name_terms
         if first_word_in_non_name_terms and request_type != "full":
             return []
@@ -1215,6 +1257,8 @@ class PIIEngine:
         # - first-name prompt: "Lynn 925.963.1940"
         # - full-name prompt: "Angela wbarno2010@gmail.com"
         tail_candidate = re.sub(r"^[\s,;:\-]+", "", working_text[match.end(1) :]).strip()
+        if normalized in CONTACT_CHANNEL_LABEL_WORDS and tail_candidate and PHONE_RE.search(tail_candidate):
+            return []
         if tail_candidate:
             trimmed_tail = tail_candidate.rstrip(".,!?;)")
             has_contact_tail = bool(EMAIL_RE.fullmatch(trimmed_tail) or PHONE_RE.fullmatch(trimmed_tail))
@@ -1411,6 +1455,10 @@ class PIIEngine:
                 allow_lower_second = request_type == "full" and (
                     has_contact_anywhere
                     or (len(words) == 2 and not tail_after_full_stripped and not first_word_in_non_name_terms)
+                ) or request_type == "last" and len(words) == 2 and not tail_after_full_stripped
+                looks_like_location_phrase = self._looks_like_location_non_name_phrase(
+                    [full_match.group(1).lower(), full_match.group(2).lower()],
+                    non_name_terms,
                 )
                 if (
                     (value[0].isupper() or request_type == "full")
@@ -1419,6 +1467,7 @@ class PIIEngine:
                     and second_normalized not in NON_NAME_MULTIWORD_COMPONENTS
                     and second_normalized not in NAME_PREFIX_EXCLUSIONS
                     and full_normalized not in non_name_terms
+                    and not looks_like_location_phrase
                     and (
                         not tail_after_full_stripped
                         or tail_after_full_stripped[0] in {",", ".", "!", "?", ";", ":"}
@@ -2422,6 +2471,8 @@ class PIIEngine:
             return False
 
         if any(normalized_text.startswith(f"{cue} ") for cue in LOCATION_CUE_PHRASES):
+            return True
+        if any(normalized_text.endswith(f" {cue}") for cue in LOCATION_CUE_PHRASES):
             return True
         if any(f" {cue} " in normalized_text for cue in LOCATION_CUE_PHRASES):
             return True

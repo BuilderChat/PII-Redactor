@@ -668,6 +668,28 @@ def test_last_name_prompt_with_trailing_request_still_redacts_last_name() -> Non
     )
 
 
+def test_location_topic_cue_with_allowlisted_city_is_not_name() -> None:
+    assert _redact("Location Regina", non_name_allowlist=["Regina"]) == "Location Regina"
+    assert _redact("Regina Location", non_name_allowlist=["Regina"]) == "Regina Location"
+    assert _redact("Pricing Westerra", non_name_allowlist=["Westerra"]) == "Pricing Westerra"
+    assert _redact("Westerra pricing", non_name_allowlist=["Westerra"]) == "Westerra pricing"
+
+
+def test_prompted_last_name_reply_does_not_redact_question_starter() -> None:
+    prompt = "Excellent, Shad! Our team will reach out shortly. What's your last name, just in case?"
+    assert _redact("When can i expect the call", previous_assistant_message=prompt) == "When can i expect the call"
+
+
+def test_prompted_first_name_reply_does_not_redact_contact_label_before_phone() -> None:
+    prompt = "Got it! What's your first name?"
+    assert _redact("Cell 3065026050", previous_assistant_message=prompt) == "Cell <ph_1>"
+
+
+def test_last_name_prompt_accepts_two_token_full_name_reply() -> None:
+    prompt = "Perfect! The team will reach out with the address and parking details. Last name for our records?"
+    assert _redact("Mohammad sultan", previous_assistant_message=prompt) == "<fn_1> <ln_1>"
+
+
 def test_and_is_not_captured_as_last_name_then_repeated() -> None:
     engine = PIIEngine(use_presidio=False, use_gliner=False)
     vault = PIIVault()
