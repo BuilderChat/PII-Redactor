@@ -11,12 +11,13 @@ This service redacts PII before text reaches an LLM, then rehydrates placeholder
 - Isolation key: `thread_id + session_id + visitor_id + client_id + assistant_id`
 - API surface: REST only (`/redact`, `/rehydrate`, `/session/end`, `/allowlist/refresh`, `/health`)
 - Security: API key (raw or SHA-256 hash verification)
-- Detection backend: Presidio + GLiNER (automatic fallback to regex/heuristics)
+- Detection backend: tuned deterministic heuristics by default on the `slm` branch
 - Default failure policy: fail-closed (per-request override available)
-- Air-gap defaults:
-  - `PII_REDACTOR_GLINER_ALLOW_REMOTE_DOWNLOAD=false` (local model cache only)
-  - `PII_REDACTOR_PRESIDIO_MINIMAL_RECOGNIZERS=true` (email/phone recognizers only)
-  - `PII_REDACTOR_REQUIRE_GLINER` / `PII_REDACTOR_REQUIRE_PRESIDIO` available for startup fail-fast
+- SLM defaults:
+  - `PII_REDACTOR_USE_GLINER=false`
+  - `PII_REDACTOR_USE_PRESIDIO=false`
+  - `PII_REDACTOR_REQUIRE_GLINER=false`
+  - `PII_REDACTOR_REQUIRE_PRESIDIO=false`
 
 ## Token Policy
 
@@ -40,6 +41,29 @@ Notes:
 
 - Start the server from repo root so `.env` is auto-loaded.
 - If your runtime already injects environment variables, set `PII_REDACTOR_LOAD_DOTENV=false`.
+- `requirements.txt` is intentionally slim on the `slm` branch. Use `requirements-full.txt` only for GLiNER/Presidio experiments.
+
+## SLM Image
+
+The `slm` branch is the small-image line. It excludes GLiNER, Presidio, spaCy, and their model/runtime dependencies from `requirements.txt`; the Docker image defaults to heuristic-only redaction.
+
+Build normally:
+
+```bash
+docker build -t pii-redactor:slm .
+```
+
+Verify the running image through `/health`:
+
+```json
+{
+  "presidio_enabled": false,
+  "gliner_enabled": false,
+  "name_detection_mode": "heuristic"
+}
+```
+
+Rollback path: deploy the previous full-detector branch/image, or install from `requirements-full.txt` and explicitly set `PII_REDACTOR_USE_GLINER=true` / `PII_REDACTOR_USE_PRESIDIO=true`.
 
 ## Example
 
@@ -322,8 +346,8 @@ PII_REDACTOR_PERSISTENCE_KEY_VERSION=v1
 
 - `PII-redactor-plan.v2.md` is preserved as the planning reference.
 - Runtime health endpoint includes detector status and persistence diagnostics so you can verify detector load and persistence recovery state.
-- If Presidio/GLiNER dependencies or models are unavailable and `PII_REDACTOR_REQUIRE_*` flags are `false`, the engine falls back to regex/heuristics.
-- If `PII_REDACTOR_REQUIRE_GLINER=true` or `PII_REDACTOR_REQUIRE_PRESIDIO=true`, startup fails if the required detector is unavailable.
-- For strict air-gap mode, keep:
+- On the `slm` branch, Presidio/GLiNER are not installed by default and the engine starts directly in heuristic mode.
+- If you install `requirements-full.txt`, `PII_REDACTOR_REQUIRE_GLINER=true` or `PII_REDACTOR_REQUIRE_PRESIDIO=true` still makes startup fail if the required detector is unavailable.
+- For full-detector strict air-gap mode, keep:
   - `PII_REDACTOR_GLINER_ALLOW_REMOTE_DOWNLOAD=false`
   - `PII_REDACTOR_PRESIDIO_MINIMAL_RECOGNIZERS=true`

@@ -716,3 +716,47 @@ def test_phone_then_two_token_name_redacts_both_name_tokens() -> None:
 def test_coordinated_name_phrase_is_still_redacted() -> None:
     text = "Good morning, I'd like to register my clients, Paul and kelly Townsend."
     assert _redact(text) == "Good morning, I'd like to register my clients, <fn_1> and <mn1_1> <ln_1>."
+
+
+def test_utility_and_concierge_service_phrases_are_not_redacted_as_names() -> None:
+    assert _redact("Utility Concierge") == "Utility Concierge"
+    assert _redact("Utility Services") == "Utility Services"
+    assert _redact("Home Concierge") == "Home Concierge"
+
+
+def test_contact_then_explicit_name_is_redacted() -> None:
+    assert _redact("Phone is 951 990 5303, name is Pat Bennett") == "Phone is <ph_1>, name is <fn_1> <ln_1>"
+
+
+def test_explicit_first_name_is_phrase_is_redacted() -> None:
+    assert _redact("My first name is Thibaotran. Thank you!") == "My first name is <fn_1>. Thank you!"
+    assert _redact("First Name is Manik") == "First Name is <fn_1>"
+
+
+def test_whose_number_lookup_does_not_redact_question_words_as_name() -> None:
+    assert _redact("Whose number is (817) 809-8240?") == "Whose number is <ph_1>?"
+    assert _redact("Who's phone is (817) 809-8240?") == "Who's phone is <ph_1>?"
+
+
+def test_city_state_abbreviation_phrase_is_not_redacted_without_allowlist() -> None:
+    assert _redact("Melissa TX") == "Melissa TX"
+    assert _redact("Boise ID") == "Boise ID"
+    assert _redact("Bend OR") == "Bend OR"
+
+
+def test_allowlisted_community_name_is_not_redacted() -> None:
+    assert _redact("Wildflower Ranch", non_name_allowlist=["Wildflower Ranch"]) == "Wildflower Ranch"
+
+
+def test_reversed_last_name_label_is_redacted() -> None:
+    assert _redact("Raza is my last name") == "<ln_1> is my last name"
+    assert _redact("A is my last name") == "<ln_1> is my last name"
+
+
+def test_my_name_is_with_middle_initial_and_contact_redacts_full_name() -> None:
+    text = "My name is Luis R Ortiz Phone 214-717-2802 luisortiz.cruz@gmail.com Thanks"
+    assert _redact(text) == "My name is <fn_1> <mn1_1> <ln_1> Phone <ph_1> <em_1> Thanks"
+
+
+def test_lastname_is_initial_is_redacted() -> None:
+    assert _redact("Lastname is A") == "Lastname is <ln_1>"

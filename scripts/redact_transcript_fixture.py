@@ -5,6 +5,11 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src.pii_engine import PIIEngine
 from src.pii_vault import PIIVault
@@ -12,10 +17,17 @@ from src.pii_vault import PIIVault
 
 THREAD_START_RE = re.compile(r"^Started:\s+.*\|\s+Thread:\s+(?P<thread>\S+)\s*$")
 THREAD_LINE_RE = re.compile(r"^Thread\s+(?P<thread>\S+):\s*$")
-ROLE_HEADER_RE = re.compile(r"^(?P<role>User|Agent)\s+\([^)]*\):\s*$")
-ROLE_INLINE_RE = re.compile(r"^(?P<prefix>(?P<role>User|Agent)\s+\([^)]*\):)\s*(?P<message>.*\S)\s*$")
+SHADOW_EXPORT_RE = re.compile(r"^PII Shadow Export\s+\|.*\|\s+Thread:\s+(?P<thread>\S+)\s*$")
+CONVERSATION_THREAD_RE = re.compile(r"^Conversation Transcript\s+\(Thread:\s+(?P<thread>[^)]+)\)\s+-\s+.*$")
+ROLE_HEADER_RE = re.compile(r"^(?P<role>User|Agent|Assistant)\s+\([^)]*\):\s*$")
+ROLE_INLINE_RE = re.compile(
+    r"^(?P<prefix>(?P<role>User|Agent|Assistant)\s+\([^)]*\):)\s*(?P<message>.*\S)\s*$"
+)
 SEPARATOR_PREFIX = "=" * 20
 DASH_SEPARATOR_RE = re.compile(r"^-{10,}\s*$")
+LIVE_TRANSCRIPT_MARKER = "[LIVE TRANSCRIPT]"
+SHADOW_TRANSCRIPT_MARKER = "[SHADOW TRANSCRIPT]"
+ASSISTANT_ROLES = {"Agent", "Assistant"}
 
 
 @dataclass
@@ -44,9 +56,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=("user-only", "both"),
+        choices=("user-only", "both", "user-sourced-both"),
         default="user-only",
-        help="Redact only User blocks (default) or both User/Agent blocks.",
+        help="Redact only User blocks, all role blocks, or user-sourced PII repeated by assistants.",
     )
     parser.add_argument(
         "--engine-tag",
@@ -88,6 +100,12 @@ def is_boundary_line(line: str) -> bool:
         return True
     if THREAD_LINE_RE.match(stripped):
         return True
+    if SHADOW_EXPORT_RE.match(stripped):
+        return True
+    if CONVERSATION_THREAD_RE.match(stripped):
+        return True
+    if stripped in {LIVE_TRANSCRIPT_MARKER, SHADOW_TRANSCRIPT_MARKER}:
+        return True
     if stripped.startswith(SEPARATOR_PREFIX):
         return True
     if DASH_SEPARATOR_RE.match(stripped):
@@ -103,7 +121,44 @@ def extract_thread_id(line: str) -> str | None:
     match = THREAD_LINE_RE.match(line)
     if match:
         return match.group("thread")
+    match = SHADOW_EXPORT_RE.match(line)
+    if match:
+        return match.group("thread")
+    match = CONVERSATION_THREAD_RE.match(line)
+    if match:
+        return match.group("thread")
     return None
+
+
+def extract_live_transcript_lines(source_lines: list[str]) -> list[str]:
+    """Return only live transcript sections from a shadow export file."""
+    out_lines: list[str] = []
+    in_live_section = False
+    pending_export_header: str | None = None
+
+    for raw in source_lines:
+        line = raw.rstrip("\n")
+
+        if line == LIVE_TRANSCRIPT_MARKER:
+            if pending_export_header is not None:
+                out_lines.append(pending_export_header)
+                pending_export_header = None
+            in_live_section = True
+            continue
+
+        if line == SHADOW_TRANSCRIPT_MARKER:
+            in_live_section = False
+            continue
+
+        if SHADOW_EXPORT_RE.match(line):
+            in_live_section = False
+            pending_export_header = raw
+            continue
+
+        if in_live_section:
+            out_lines.append(raw)
+
+    return out_lines
 
 
 
@@ -153,14 +208,88 @@ def load_floor_plan_name_terms(path: Path | None) -> list[str]:
     return sorted(terms)
 
 
+def is_user_role(role: str) -> bool:
+    return role == "User"
+
+
+def is_assistant_role(role: str) -> bool:
+    return role in ASSISTANT_ROLES
+
+
+def should_redact_role(role: str, redact_mode: str) -> bool:
+    if is_user_role(role):
+        return True
+    if redact_mode == "both":
+        return is_assistant_role(role)
+    if redact_mode == "user-sourced-both":
+        return is_assistant_role(role)
+    return False
+
+
+def redact_user_sourced_text(
+    content: str,
+    engine: PIIEngine,
+    vault: PIIVault,
+    non_name_allowlist: list[str],
+) -> tuple[str, int]:
+    runtime_non_name_terms = set(engine._configured_non_name_terms)
+    runtime_non_name_terms.update(engine._normalize_non_name_terms(non_name_allowlist))
+    spans = engine._detect_repeat_value_spans(
+        content,
+        vault,
+        non_name_terms=runtime_non_name_terms,
+        suppress_name_entities=False,
+    )
+    if not spans:
+        return content, 0
+
+    ordered_spans = engine._non_overlapping_spans(spans, len(content))
+    chunks: list[str] = []
+    replacements: dict[str, str] = {}
+    cursor = 0
+
+    for span in ordered_spans:
+        chunks.append(content[cursor : span.start])
+        replacement, found_values = engine._placeholder_for_span(span, vault)
+        chunks.append(replacement)
+        replacements.update(found_values)
+        cursor = span.end
+
+    chunks.append(content[cursor:])
+    return "".join(chunks), len(replacements)
+
+
+def redact_message_line(
+    content: str,
+    role: str,
+    engine: PIIEngine,
+    vault: PIIVault,
+    previous_assistant_message: str | None,
+    non_name_allowlist: list[str],
+    redact_mode: str,
+) -> tuple[str, int]:
+    if redact_mode == "user-sourced-both" and is_assistant_role(role):
+        return redact_user_sourced_text(content, engine, vault, non_name_allowlist)
+
+    result = engine.redact(
+        content,
+        vault,
+        previous_assistant_message=previous_assistant_message,
+        non_name_allowlist=non_name_allowlist,
+    )
+    return result.redacted_text, len(result.replacements)
+
+
 
 def redact_message_block(
     lines: list[str],
+    role: str,
     engine: PIIEngine,
     vault: PIIVault,
     stats: Stats,
     previous_assistant_message: str | None,
     non_name_allowlist: list[str],
+    redact_mode: str,
 ) -> list[str]:
     out: list[str] = []
 
@@ -178,14 +307,17 @@ def redact_message_block(
             out.append(raw_line)
             continue
 
-        result = engine.redact(
+        redacted_text, replacement_count = redact_message_line(
             content,
+            role,
+            engine,
             vault,
             previous_assistant_message=previous_assistant_message,
             non_name_allowlist=non_name_allowlist,
+            redact_mode=redact_mode,
         )
-        stats.replaced_tokens += len(result.replacements)
-        out.append(result.redacted_text + ("\n" if has_newline else ""))
+        stats.replaced_tokens += replacement_count
+        out.append(redacted_text + ("\n" if has_newline else ""))
 
     return out
 
@@ -201,8 +333,17 @@ def redact_transcript(
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     source_lines = input_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    return redact_transcript_lines(source_lines, output_path, redact_mode, non_name_allowlist)
 
-    engine = PIIEngine()
+
+def redact_transcript_lines(
+    source_lines: list[str],
+    output_path: Path,
+    redact_mode: str,
+    non_name_allowlist: list[str],
+    engine: PIIEngine | None = None,
+) -> Stats:
+    engine = engine or PIIEngine()
     vault_by_thread: dict[str, PIIVault] = {}
     last_agent_message_by_thread: dict[str, str] = {}
     current_thread: str | None = None
@@ -230,23 +371,26 @@ def redact_transcript(
             role = inline_role_match.group("role")
             prefix = inline_role_match.group("prefix")
             inline_message = inline_role_match.group("message")
-            if role == "User":
+            if is_user_role(role):
                 stats.user_blocks += 1
             else:
                 stats.agent_blocks += 1
 
-            should_redact = role == "User" or redact_mode == "both"
+            should_redact = should_redact_role(role, redact_mode)
             previous_assistant_message = last_agent_message_by_thread.get(current_thread, "")
             if should_redact:
-                result = engine.redact(
+                redacted_text, replacement_count = redact_message_line(
                     inline_message,
+                    role,
+                    engine,
                     vault_by_thread[current_thread],
                     previous_assistant_message=previous_assistant_message,
                     non_name_allowlist=non_name_allowlist,
+                    redact_mode=redact_mode,
                 )
                 stats.processed_lines += 1
-                stats.replaced_tokens += len(result.replacements)
-                out_lines.append(f"{prefix} {result.redacted_text}" + ("\n" if raw.endswith("\n") else ""))
+                stats.replaced_tokens += replacement_count
+                out_lines.append(f"{prefix} {redacted_text}" + ("\n" if raw.endswith("\n") else ""))
             else:
                 out_lines.append(raw)
             i += 1
@@ -258,17 +402,19 @@ def redact_transcript(
             if should_redact:
                 redacted_block = redact_message_block(
                     block_lines,
+                    role,
                     engine,
                     vault_by_thread[current_thread],
                     stats,
                     previous_assistant_message=previous_assistant_message,
                     non_name_allowlist=non_name_allowlist,
+                    redact_mode=redact_mode,
                 )
                 out_lines.extend(redacted_block)
             else:
                 out_lines.extend(block_lines)
 
-            if role == "Agent":
+            if is_assistant_role(role):
                 inline_part = inline_message.strip()
                 tail_part = "".join(block_lines).strip()
                 if inline_part and tail_part:
@@ -282,7 +428,7 @@ def redact_transcript(
         role_match = ROLE_HEADER_RE.match(line)
         if role_match and current_thread is not None:
             role = role_match.group("role")
-            if role == "User":
+            if is_user_role(role):
                 stats.user_blocks += 1
             else:
                 stats.agent_blocks += 1
@@ -295,22 +441,24 @@ def redact_transcript(
                 i += 1
 
             block_lines = source_lines[block_start:i]
-            should_redact = role == "User" or redact_mode == "both"
+            should_redact = should_redact_role(role, redact_mode)
             previous_assistant_message = last_agent_message_by_thread.get(current_thread, "")
             if should_redact:
                 redacted_block = redact_message_block(
                     block_lines,
+                    role,
                     engine,
                     vault_by_thread[current_thread],
                     stats,
                     previous_assistant_message=previous_assistant_message,
                     non_name_allowlist=non_name_allowlist,
+                    redact_mode=redact_mode,
                 )
                 out_lines.extend(redacted_block)
             else:
                 out_lines.extend(block_lines)
 
-            if role == "Agent":
+            if is_assistant_role(role):
                 last_agent_message_by_thread[current_thread] = "".join(block_lines).strip()
             continue
 

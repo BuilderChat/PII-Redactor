@@ -50,21 +50,27 @@ NAME_LABELLED_REPLY_RE = re.compile(
     re.IGNORECASE,
 )
 NAME_LABELLED_REPLY_ALT_RE = re.compile(
-    r"^\s*(?P<label>last\s+name|surname|family\s+name|first\s+name)\s*[:\-]\s*"
+    r"^\s*(?P<label>last\s*name|lastname|surname|family\s+name|first\s*name)\s*(?::|\-|\bis\b)\s*"
     r"(?P<name>[A-Za-z][A-Za-z'\-]*)\b",
     re.IGNORECASE,
 )
 LAST_NAME_LABELLED_REPLY_SPACE_RE = re.compile(
-    r"^\s*(?P<label>last\s+name|surname|family\s+name)\s+(?P<name>[A-Za-z][A-Za-z'\-]*)\b",
+    r"^\s*(?P<label>last\s*name|lastname|surname|family\s+name)\s+(?P<name>[A-Za-z][A-Za-z'\-]*)\b",
     re.IGNORECASE,
 )
 INLINE_LAST_NAME_IS_RE = re.compile(
-    rf"\b(?:last\s+name|surname|family\s+name)\s+is\s+(?P<name>{NAME_WORD_PATTERN})\b",
+    rf"\b(?:last\s*name|lastname|surname|family\s+name)\s+is\s+(?P<name>{NAME_WORD_PATTERN})\b",
+    re.IGNORECASE | re.UNICODE,
+)
+REVERSED_NAME_LABEL_RE = re.compile(
+    rf"\b(?P<name>{NAME_WORD_PATTERN}(?:\s+[^\W\d_]\.?)?(?:\s+{NAME_WORD_PATTERN})?)\s+"
+    r"is\s+(?:my\s+|the\s+)?(?P<label>first\s*name|last\s*name|lastname|surname|family\s+name|full\s+name|name)\b",
     re.IGNORECASE | re.UNICODE,
 )
 KEYED_NAME_VALUE_RE = re.compile(
-    r"\b(?P<label>(?:your\s+)?name(?:\s*\(\s*first\s*(?:and|&)\s*last\s*\))?|names|first\s+name|last\s+name)\s*[:\-]\s*"
-    r"(?P<value>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)?)",
+    r"\b(?P<label>(?:your\s+)?name(?:\s*\(\s*first\s*(?:and|&)\s*last\s*\))?|names|first\s*name|last\s*name|lastname)"
+    r"\s*(?::|\-|\bis\b)\s*"
+    rf"(?P<value>{NAME_WORD_PATTERN}(?:\s+{NAME_WORD_PATTERN}){{0,2}})",
     re.IGNORECASE,
 )
 REALTOR_PAIR_INTRO_RE = re.compile(
@@ -293,6 +299,12 @@ NON_USER_CONTACT_LOOKUP_PREFIXES = (
     "e-mail address for ",
     "email for ",
     "phone number for ",
+    "whose number ",
+    "whose phone ",
+    "who's number ",
+    "who's phone ",
+    "what number ",
+    "what phone ",
     "contact info for ",
     "contact information for ",
     "contact for ",
@@ -400,6 +412,7 @@ NON_NAME_SINGLE_WORDS = {
     "just",
     "great",
     "like",
+    "fine",
     "monday",
     "va",
     "veteran",
@@ -1795,6 +1808,50 @@ class PIIEngine:
         return [Span(match.start(2), match.end(2), "ln", second, prefer_latest=True)]
 
     def _detect_name_labelled_reply_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
+        reversed_match = REVERSED_NAME_LABEL_RE.search(text)
+        if reversed_match:
+            label = re.sub(r"\s+", " ", reversed_match.group("label").strip().lower())
+            value_text = reversed_match.group("name")
+            token_matches = list(re.finditer(NAME_WORD_PATTERN, value_text, flags=re.UNICODE))
+            if token_matches:
+                first_token = token_matches[0].group(0)
+                first_normalized = first_token.lower().rstrip(".")
+                full_normalized = self._normalize_text_phrase(value_text)
+                is_explicit_last_label = "last" in label or "surname" in label or "family" in label
+                allowed_initial = is_explicit_last_label and len(first_token.rstrip(".")) == 1
+                if (
+                    (allowed_initial or not self._is_blocked_name_token(first_normalized))
+                    and full_normalized not in non_name_terms
+                ):
+                    if "first" in label:
+                        return [
+                            Span(
+                                reversed_match.start("name") + token_matches[0].start(),
+                                reversed_match.start("name") + token_matches[0].end(),
+                                "fn",
+                                first_token,
+                            )
+                        ]
+                    if "last" in label or "surname" in label or "family" in label:
+                        return [
+                            Span(
+                                reversed_match.start("name") + token_matches[0].start(),
+                                reversed_match.start("name") + token_matches[0].end(),
+                                "ln",
+                                first_token,
+                            )
+                        ]
+                    if len(token_matches) == 1:
+                        return [
+                            Span(
+                                reversed_match.start("name") + token_matches[0].start(),
+                                reversed_match.start("name") + token_matches[0].end(),
+                                "fn",
+                                first_token,
+                            )
+                        ]
+                    return [Span(reversed_match.start("name"), reversed_match.end("name"), "name", value_text)]
+
         for pattern in (NAME_LABELLED_REPLY_RE, NAME_LABELLED_REPLY_ALT_RE, LAST_NAME_LABELLED_REPLY_SPACE_RE):
             match = pattern.match(text)
             if not match:
@@ -1860,6 +1917,8 @@ class PIIEngine:
                 normalized = token.lower()
                 if normalized in NON_NAME_SINGLE_WORDS or normalized in non_name_terms:
                     continue
+                if not token[:1].isupper():
+                    continue
                 spans.append(
                     Span(
                         match.start("value") + token_matches[0].start(),
@@ -1874,6 +1933,8 @@ class PIIEngine:
                 token = token_matches[0].group(0)
                 normalized = token.lower()
                 if normalized in NON_NAME_SINGLE_WORDS or normalized in non_name_terms:
+                    continue
+                if len(token) > 1 and not token[:1].isupper():
                     continue
                 spans.append(
                     Span(
@@ -1890,6 +1951,24 @@ class PIIEngine:
             first = token_matches[0].group(0)
             first_normalized = first.lower()
             if first_normalized in NON_NAME_SINGLE_WORDS or first_normalized in non_name_terms:
+                continue
+
+            if len(token_matches) >= 3:
+                full_value = value_text[: token_matches[2].end()].strip()
+                full_normalized = self._normalize_text_phrase(full_value)
+                token_norms = [token_matches[idx].group(0).lower().rstrip(".") for idx in range(3)]
+                if any(self._is_blocked_name_token(token) for idx, token in enumerate(token_norms) if idx != 1):
+                    continue
+                if full_normalized in non_name_terms:
+                    continue
+                spans.append(
+                    Span(
+                        match.start("value") + token_matches[0].start(),
+                        match.start("value") + token_matches[2].end(),
+                        "name",
+                        full_value,
+                    )
+                )
                 continue
 
             if len(token_matches) >= 2:
@@ -2173,10 +2252,24 @@ class PIIEngine:
             return False
         if len(words) > 5:
             return False
-        if any(len(w) <= 1 for w in words):
-            return False
 
         lower_words = [w.lower() for w in words]
+        source_words = re.findall(r"[A-Za-z][A-Za-z'\-]*", source_text)
+        context_before = source_text[max(0, start - 40) : start].lower()
+        context_after = source_text[end : min(len(source_text), end + 40)].lower()
+        has_name_cue = any(cue in context_before for cue in NAME_CONTEXT_CUES) or any(
+            cue in context_after for cue in NAME_CONTEXT_CUES
+        )
+        short_word_indexes = [idx for idx, word in enumerate(words) if len(word) <= 1]
+        if short_word_indexes:
+            middle_initial_only = (
+                has_name_cue
+                and len(words) >= 3
+                and all(0 < idx < len(words) - 1 for idx in short_word_indexes)
+            )
+            if not middle_initial_only:
+                return False
+
         if lower_words[0] in NAME_PREFIX_EXCLUSIONS:
             return False
         if len(words) >= 2 and lower_words[0] in {"yes", "no"}:
@@ -2194,12 +2287,6 @@ class PIIEngine:
         if len(words) > 1 and any(w in NON_NAME_MULTIWORD_COMPONENTS for w in lower_words):
             return False
 
-        source_words = re.findall(r"[A-Za-z][A-Za-z'\-]*", source_text)
-        context_before = source_text[max(0, start - 40) : start].lower()
-        context_after = source_text[end : min(len(source_text), end + 40)].lower()
-        has_name_cue = any(cue in context_before for cue in NAME_CONTEXT_CUES) or any(
-            cue in context_after for cue in NAME_CONTEXT_CUES
-        )
         if len(words) >= 2 and lower_words[0] in NON_NAME_SINGLE_WORDS and not (has_name_cue or assistant_requests_name):
             return False
         if (
@@ -2294,6 +2381,8 @@ class PIIEngine:
         normalized_phrase = " ".join(lower_words)
         if normalized_phrase in GEO_REGION_PHRASES and len(lower_words) >= 2:
             return True
+        if len(lower_words) == 2 and lower_words[1] in GEO_REGION_ABBREVIATIONS:
+            return True
 
         has_allowlisted_geo_term = PIIEngine._contains_phrase(lower_words, non_name_terms)
 
@@ -2356,6 +2445,8 @@ class PIIEngine:
     def _looks_like_company_non_name_phrase(lower_words: list[str]) -> bool:
         if len(lower_words) < 2:
             return False
+        if lower_words[0] == "utility" or lower_words[-1] == "concierge":
+            return True
         keyword_hits = sum(1 for word in lower_words if word in BUSINESS_NAME_KEYWORDS)
         if keyword_hits >= 1:
             return True
