@@ -36,6 +36,16 @@ def test_still_redacts_explicit_name_intro() -> None:
     assert _redact(text) == "My name is <fn_1> <ln_1>"
 
 
+def test_explicit_name_intro_stops_before_question_tail() -> None:
+    text = "hi my name is jon how are you"
+    assert _redact(text) == "hi my name is <fn_1> how are you"
+
+
+def test_explicit_full_name_intro_stops_before_question_tail() -> None:
+    text = "my name is Pat Bennett how are you"
+    assert _redact(text) == "my name is <fn_1> <ln_1> how are you"
+
+
 def test_single_word_reply_is_not_name_without_assistant_name_prompt() -> None:
     assert _redact("Windsor") == "Windsor"
 

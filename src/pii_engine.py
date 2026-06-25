@@ -2008,6 +2008,10 @@ class PIIEngine:
         for match in KEYED_NAME_VALUE_RE.finditer(text):
             label = re.sub(r"\s+", " ", match.group("label").strip().lower())
             value_text = match.group("value")
+            if "first" not in label and "last" not in label:
+                trimmed_value, _trimmed_chars = self._extract_name_intro_candidate(value_text)
+                if trimmed_value:
+                    value_text = trimmed_value
             token_matches = list(re.finditer(r"[A-Za-z][A-Za-z'\-]*", value_text))
             if not token_matches:
                 continue
