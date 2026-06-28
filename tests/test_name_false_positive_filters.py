@@ -602,6 +602,26 @@ def test_first_name_prompt_with_parenthetical_alias_redacts_both_names() -> None
     assert _redact("Debbie (Debra)", previous_assistant_message=prompt) == "<fn_1> (<fn_2>)"
 
 
+def test_first_name_prompt_with_explanation_tail_redacts_name_only() -> None:
+    prompt = "Great! What's your first name?"
+    assert _redact("Deborah like in The Book of Genesis.", previous_assistant_message=prompt) == (
+        "<fn_1> like in The Book of Genesis."
+    )
+    assert _redact("Jon, just like the finish", previous_assistant_message=prompt) == "<fn_1>, just like the finish"
+
+
+def test_first_name_prompt_explanation_tail_does_not_redact_blocked_starter() -> None:
+    prompt = "Great! What's your first name?"
+    assert _redact("Like the Jasmine", previous_assistant_message=prompt) == "Like the Jasmine"
+
+
+def test_full_name_prompt_with_explanation_tail_redacts_name_only() -> None:
+    prompt = "What's your first and last name?"
+    assert _redact("Jon Matte, just like the finish", previous_assistant_message=prompt) == (
+        "<fn_1> <ln_1>, just like the finish"
+    )
+
+
 def test_first_name_prompt_with_dash_alias_redacts_both_names() -> None:
     prompt = "What's your first name?"
     assert _redact("Jon - Jonathan", previous_assistant_message=prompt) == "<fn_1> - <fn_2>"

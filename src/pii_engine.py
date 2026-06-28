@@ -29,6 +29,10 @@ ACKNOWLEDGEMENT_PREFIX_RE = re.compile(
     r"^\s*(?:yes|yeah|yep|yup|sure|ok|okay)\b(?:\s*[,.;:!?]+\s*|\s*[-–—]\s*|\s+)",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_NAME_EXPLANATION_TAIL_RE = re.compile(
+    r"^\s*(?:[,.;:!?-]\s*)?(?:(?:just\s+)?like\b|same\s+as\b|as\s+in\b|as\s+(?:the|a|an)\b)",
+    re.IGNORECASE | re.UNICODE,
+)
 COORDINATED_NAME_RE = re.compile(
     r"\b([A-Z][A-Za-z'\-]*)\s+(?:and|&)\s+([A-Za-z][A-Za-z'\-]*)\s+([A-Z][A-Za-z'\-]*)\b"
 )
@@ -1299,7 +1303,42 @@ class PIIEngine:
             if had_acknowledgement_prefix and re.match(r"\s*[,.;:!?-–—]\s+", tail_text_for_first):
                 return [_span(match.start(1), match.end(1), "fn", value)]
 
+            if PROMPTED_NAME_EXPLANATION_TAIL_RE.match(tail_text_for_first):
+                return [_span(match.start(1), match.end(1), "fn", value)]
+
         if request_type == "full":
+            prompted_full_explanation_match = re.match(
+                rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b",
+                working_text,
+                flags=re.UNICODE,
+            )
+            if prompted_full_explanation_match:
+                first = prompted_full_explanation_match.group(1)
+                second = prompted_full_explanation_match.group(2)
+                first_normalized = first.lower()
+                second_normalized = second.lower()
+                full_value = f"{first} {second}"
+                full_normalized = self._normalize_text_phrase(full_value)
+                tail_after_full = working_text[prompted_full_explanation_match.end(2) :]
+                if (
+                    PROMPTED_NAME_EXPLANATION_TAIL_RE.match(tail_after_full)
+                    and (first[0].isupper() or second[0].isupper())
+                    and not any(self._is_blocked_name_token(token) for token in (first_normalized, second_normalized))
+                    and full_normalized not in non_name_terms
+                    and not self._looks_like_location_non_name_phrase(
+                        [first_normalized, second_normalized],
+                        non_name_terms,
+                    )
+                ):
+                    return [
+                        _span(
+                            prompted_full_explanation_match.start(1),
+                            prompted_full_explanation_match.end(2),
+                            "name",
+                            full_value,
+                        )
+                    ]
+
             initial_full_match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+([^\W\d_])\b", working_text, flags=re.UNICODE)
             if initial_full_match:
                 tail_after_initial = working_text[initial_full_match.end(2) :]
