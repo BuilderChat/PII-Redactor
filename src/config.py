@@ -35,6 +35,9 @@ class Settings:
     non_name_terms_json_path: str
     vault_ttl_seconds: int
     max_active_scopes: int
+    redact_max_concurrency: int
+    rehydrate_max_concurrency: int
+    concurrency_acquire_timeout_seconds: float
     persistence_queue_max: int
     persistence_block_on_error: bool
     persistence_recovery_cooldown_seconds: int
@@ -124,6 +127,12 @@ def get_settings() -> Settings:
         non_name_terms_json_path=os.getenv("PII_REDACTOR_NON_NAME_TERMS_JSON_PATH", "").strip(),
         vault_ttl_seconds=max(60, _env_int("PII_REDACTOR_VAULT_TTL_SECONDS", 3600)),
         max_active_scopes=max(1, _env_int("PII_REDACTOR_MAX_ACTIVE_SCOPES", 15)),
+        redact_max_concurrency=max(1, _env_int("PII_REDACTOR_REDACT_MAX_CONCURRENCY", 24)),
+        rehydrate_max_concurrency=max(1, _env_int("PII_REDACTOR_REHYDRATE_MAX_CONCURRENCY", 24)),
+        concurrency_acquire_timeout_seconds=max(
+            0.0,
+            _env_float("PII_REDACTOR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS", 0.5),
+        ),
         persistence_queue_max=max(1, _env_int("PII_REDACTOR_PERSISTENCE_QUEUE_MAX", 1024)),
         persistence_block_on_error=_env_bool("PII_REDACTOR_PERSISTENCE_BLOCK_ON_ERROR", True),
         persistence_recovery_cooldown_seconds=max(

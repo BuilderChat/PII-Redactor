@@ -3,12 +3,12 @@
 ## Runtime Modules
 
 - `src/server.py`: FastAPI app, auth guard, REST endpoints (`/redact`, `/rehydrate`, `/session/end`, `/allowlist/refresh`, `/health`) with detector, request, and persistence diagnostics.
-- `src/middleware.py`: Request orchestration, vault lifecycle, persistence queue, fail-open/closed behavior, and runtime health counters.
+- `src/middleware.py`: Request orchestration, vault lifecycle, endpoint concurrency limits, persistence queue, fail-open/closed behavior, and runtime health counters.
 - `src/pii_engine.py`: Detection/redaction/rehydration logic. The `slm` branch defaults to tuned heuristics; GLiNER/Presidio remain optional when full dependencies are installed.
 - `src/pii_vault.py`: Scoped token/value store and snapshot serialization.
 - `src/persistence.py`: Vault persistence selector and stores (`none`, `internal`, `external`).
 - `src/allowlist_cache.py`: Local per-assistant allowlist cache, selector-based extraction, atomic snapshot writes.
-- `src/config.py`: Environment-backed settings loader.
+- `src/config.py`: Environment-backed settings loader, including persistence and endpoint concurrency controls.
 - `src/schemas.py`: API request/response contracts, including the `/health` observability payload.
 - `src/types.py`: Shared typed scope model.
 

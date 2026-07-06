@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from .allowlist_cache import AllowlistSelector, LocalAllowlistCache, extract_allowlist_terms
 from .config import get_settings
-from .middleware import PIIMiddleware
+from .middleware import PIIMiddleware, RedactorSaturatedError
 from .persistence import PersistenceConfigError, build_vault_store
 from .schemas import (
     AllowlistRefreshRequest,
@@ -106,6 +106,11 @@ def redact(request: RedactRequest) -> RedactResponse:
             non_name_allowlist=request.non_name_allowlist,
             fail_closed=fail_closed,
         )
+    except RedactorSaturatedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redaction service saturated",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -133,6 +138,11 @@ def rehydrate(request: RehydrateRequest) -> RehydrateResponse:
             llm_response=request.message,
             fail_closed=fail_closed,
         )
+    except RedactorSaturatedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Rehydrate service saturated",
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

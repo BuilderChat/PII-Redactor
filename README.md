@@ -266,8 +266,10 @@ Multi-instance mode (recommended for scale):
 
 - Use a shared persistence backend so any instance can rehydrate.
 - Keep `thread_id` stable per conversation.
+- Limit concurrent `/redact` and `/rehydrate` work with `PII_REDACTOR_REDACT_MAX_CONCURRENCY`, `PII_REDACTOR_REHYDRATE_MAX_CONCURRENCY`, and `PII_REDACTOR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS`. Saturated requests return `503` quickly instead of accumulating indefinitely.
 - Monitor `/health` fields:
   - `redact_active`, `rehydrate_active`
+  - `redact_max_concurrency`, `rehydrate_max_concurrency`
   - `redact_saturated_count`, `rehydrate_saturated_count`
   - `persistence_queue_depth`, `persistence_queue_max`
   - `persistence_blocking_requests`

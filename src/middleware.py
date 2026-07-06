@@ -7,7 +7,7 @@ import hashlib
 import logging
 from queue import Empty, Full, Queue
 import random
-from threading import Event, RLock, Thread
+from threading import Event, RLock, Semaphore, Thread
 import time
 
 from .allowlist_cache import LocalAllowlistCache
@@ -24,6 +24,10 @@ _PERSISTENCE_RECOVERY_MAX_SECONDS = 300
 
 class PersistenceUnavailableError(RuntimeError):
     """Raised when persistence health policy blocks request handling."""
+
+
+class RedactorSaturatedError(RuntimeError):
+    """Raised when endpoint concurrency is saturated."""
 
 
 @dataclass(slots=True)
@@ -124,6 +128,10 @@ class _RuntimeRequestState:
         with self._lock:
             self._active[endpoint] = max(0, self._active.get(endpoint, 0) - 1)
 
+    def active(self, endpoint: str) -> int:
+        with self._lock:
+            return self._active.get(endpoint, 0)
+
     def record_saturated(self, endpoint: str) -> None:
         with self._lock:
             self._saturated[endpoint] = self._saturated.get(endpoint, 0) + 1
@@ -141,6 +149,19 @@ class _RuntimeRequestState:
                 "rehydrate_saturated_count": self._saturated.get("rehydrate", 0),
                 "persistence_blocking_requests": self._persistence_blocking_requests,
             }
+
+
+class _EndpointConcurrencyLimiter:
+    def __init__(self, *, max_concurrency: int, acquire_timeout_seconds: float) -> None:
+        self.max_concurrency = max(1, int(max_concurrency))
+        self.acquire_timeout_seconds = max(0.0, float(acquire_timeout_seconds))
+        self._semaphore = Semaphore(self.max_concurrency)
+
+    def acquire(self) -> bool:
+        return self._semaphore.acquire(timeout=self.acquire_timeout_seconds)
+
+    def release(self) -> None:
+        self._semaphore.release()
 
 
 class _AsyncPersistenceWriter:
@@ -503,12 +524,38 @@ class PIIMiddleware:
         persistence_block_on_error: bool | None = None,
         persistence_recovery_cooldown_seconds: int | None = None,
         persistence_key_version: str | None = None,
+        redact_max_concurrency: int | None = None,
+        rehydrate_max_concurrency: int | None = None,
+        concurrency_acquire_timeout_seconds: float | None = None,
         allowlist_cache: LocalAllowlistCache | None = None,
     ) -> None:
         settings = get_settings()
         self.engine = engine or PIIEngine()
         self._metrics = _RuntimeMetrics()
         self._request_state = _RuntimeRequestState()
+        acquire_timeout = (
+            settings.concurrency_acquire_timeout_seconds
+            if concurrency_acquire_timeout_seconds is None
+            else max(0.0, float(concurrency_acquire_timeout_seconds))
+        )
+        self._endpoint_limiters = {
+            "redact": _EndpointConcurrencyLimiter(
+                max_concurrency=(
+                    settings.redact_max_concurrency
+                    if redact_max_concurrency is None
+                    else max(1, int(redact_max_concurrency))
+                ),
+                acquire_timeout_seconds=acquire_timeout,
+            ),
+            "rehydrate": _EndpointConcurrencyLimiter(
+                max_concurrency=(
+                    settings.rehydrate_max_concurrency
+                    if rehydrate_max_concurrency is None
+                    else max(1, int(rehydrate_max_concurrency))
+                ),
+                acquire_timeout_seconds=acquire_timeout,
+            ),
+        }
         self._lock = RLock()
         self._vaults: OrderedDict[str, _VaultEntry] = OrderedDict()
         self._store = vault_store
@@ -579,8 +626,8 @@ class PIIMiddleware:
             {
                 "redact_active": request_status["redact_active"],
                 "rehydrate_active": request_status["rehydrate_active"],
-                "redact_max_concurrency": 0,
-                "rehydrate_max_concurrency": 0,
+                "redact_max_concurrency": self._endpoint_limiters["redact"].max_concurrency,
+                "rehydrate_max_concurrency": self._endpoint_limiters["rehydrate"].max_concurrency,
                 "redact_saturated_count": request_status["redact_saturated_count"],
                 "rehydrate_saturated_count": request_status["rehydrate_saturated_count"],
                 "persistence_enabled": self._store is not None,
@@ -653,6 +700,7 @@ class PIIMiddleware:
         non_name_allowlist: list[str] | None = None,
         fail_closed: bool = True,
     ) -> RedactionResult:
+        self._acquire_endpoint("redact")
         LOGGER.info("redact_start scope=%s", scope.key())
         self._request_state.enter("redact")
         started = time.perf_counter()
@@ -722,6 +770,7 @@ class PIIMiddleware:
             return RedactionResult(redacted_text=raw_user_message, replacements={}, active_profile=1)
         finally:
             self._request_state.exit("redact")
+            self._release_endpoint("redact")
 
     def process_outbound(
         self,
@@ -730,6 +779,7 @@ class PIIMiddleware:
         *,
         fail_closed: bool = True,
     ) -> RehydrationResult:
+        self._acquire_endpoint("rehydrate")
         LOGGER.info("rehydrate_start scope=%s", scope.key())
         self._request_state.enter("rehydrate")
         started = time.perf_counter()
@@ -797,6 +847,7 @@ class PIIMiddleware:
             )
         finally:
             self._request_state.exit("rehydrate")
+            self._release_endpoint("rehydrate")
 
     def end_session(self, scope: ScopeContext, *, fail_closed: bool = True) -> bool:
         LOGGER.info("session_end_start scope=%s", scope.key())
@@ -822,6 +873,24 @@ class PIIMiddleware:
         vault.destroy()
         LOGGER.info("session_end_success scope=%s status=vault_destroyed", scope.key())
         return True
+
+
+    def _acquire_endpoint(self, endpoint: str) -> None:
+        limiter = self._endpoint_limiters[endpoint]
+        if limiter.acquire():
+            return
+        self._request_state.record_saturated(endpoint)
+        LOGGER.warning(
+            "redactor_request_saturated endpoint=%s active=%s max_concurrency=%s acquire_timeout_seconds=%.3f",
+            endpoint,
+            self._request_state.active(endpoint),
+            limiter.max_concurrency,
+            limiter.acquire_timeout_seconds,
+        )
+        raise RedactorSaturatedError(f"{endpoint} concurrency saturated")
+
+    def _release_endpoint(self, endpoint: str) -> None:
+        self._endpoint_limiters[endpoint].release()
 
     def _get_or_create_vault(self, scope: ScopeContext, *, fail_closed: bool) -> PIIVault:
         key = scope.key()

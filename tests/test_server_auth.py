@@ -6,6 +6,7 @@ import sys
 from fastapi import HTTPException
 
 
+
 _AUTH_ENV_KEYS = (
     "PII_REDACTOR_LOAD_DOTENV",
     "PII_REDACTOR_API_KEY",
@@ -16,6 +17,9 @@ _AUTH_ENV_KEYS = (
     "PII_REDACTOR_PERSISTENCE_MODE",
     "PII_REDACTOR_REQUIRE_PERSISTENCE",
     "PII_REDACTOR_PERSISTENCE_RECOVERY_COOLDOWN_SECONDS",
+    "PII_REDACTOR_REDACT_MAX_CONCURRENCY",
+    "PII_REDACTOR_REHYDRATE_MAX_CONCURRENCY",
+    "PII_REDACTOR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS",
 )
 
 
@@ -144,3 +148,55 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
     assert response.persistence_queue_max == 12
     assert response.persistence_blocking_requests == 5
     assert response.performance_metrics["redact_total_count"] == 2
+
+
+def test_redact_saturation_returns_specific_503(monkeypatch) -> None:
+    server = _load_server(monkeypatch, PII_REDACTOR_REQUIRE_API_KEY="false")
+
+    class _FakeMiddleware:
+        def process_inbound(self, **_kwargs):
+            raise server.RedactorSaturatedError("redact concurrency saturated")
+
+    server.middleware = _FakeMiddleware()
+    request = server.RedactRequest(
+        thread_id="thread_saturated_redact",
+        session_id="s1",
+        visitor_id="v1",
+        client_id="c1",
+        assistant_id="a1",
+        message="My name is Alice",
+    )
+
+    try:
+        server.redact(request)
+    except HTTPException as exc:
+        assert exc.status_code == 503
+        assert exc.detail == "Redaction service saturated"
+        return
+    raise AssertionError("Expected saturated redact request to return HTTPException")
+
+
+def test_rehydrate_saturation_returns_specific_503(monkeypatch) -> None:
+    server = _load_server(monkeypatch, PII_REDACTOR_REQUIRE_API_KEY="false")
+
+    class _FakeMiddleware:
+        def process_outbound(self, **_kwargs):
+            raise server.RedactorSaturatedError("rehydrate concurrency saturated")
+
+    server.middleware = _FakeMiddleware()
+    request = server.RehydrateRequest(
+        thread_id="thread_saturated_rehydrate",
+        session_id="s1",
+        visitor_id="v1",
+        client_id="c1",
+        assistant_id="a1",
+        message="Hello <fn_1>",
+    )
+
+    try:
+        server.rehydrate(request)
+    except HTTPException as exc:
+        assert exc.status_code == 503
+        assert exc.detail == "Rehydrate service saturated"
+        return
+    raise AssertionError("Expected saturated rehydrate request to return HTTPException")

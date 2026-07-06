@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from threading import Event, Thread
 
-from src.middleware import PIIMiddleware, PersistenceUnavailableError
+from src.middleware import PIIMiddleware, PersistenceUnavailableError, RedactorSaturatedError
 from src.persistence import PersistenceRuntimeError
 from src.pii_engine import RedactionResult, RehydrationResult
 from src.types import ScopeContext
@@ -107,6 +107,18 @@ class _BlockingEngine(_FakeEngine):
         return super().redact(raw_user_message, vault, **_kwargs)
 
 
+class _BlockingRehydrateEngine(_FakeEngine):
+    def __init__(self) -> None:
+        self.started = Event()
+        self.release = Event()
+
+    def rehydrate(self, llm_response, vault) -> RehydrationResult:
+        self.started.set()
+        if not self.release.wait(timeout=2.0):
+            raise TimeoutError("blocking rehydrate test engine timed out")
+        return super().rehydrate(llm_response, vault)
+
+
 def _wait_for(predicate, *, timeout: float = 3.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -143,6 +155,88 @@ def test_detector_status_reports_active_redact_request() -> None:
     assert not thread.is_alive()
     assert errors == []
     assert middleware.detector_status["redact_active"] == 0
+
+
+
+
+def test_redact_concurrency_saturation_fails_fast_and_releases_active_counter() -> None:
+    engine = _BlockingEngine()
+    middleware = PIIMiddleware(
+        engine=engine,
+        redact_max_concurrency=1,
+        concurrency_acquire_timeout_seconds=0.01,
+    )
+    errors: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            middleware.process_inbound(_scope("redact_limit_active"), "My name is Alice Jones")
+        except BaseException as exc:  # pragma: no cover - failure surfaced after join
+            errors.append(exc)
+
+    thread = Thread(target=_run)
+    thread.start()
+    assert engine.started.wait(timeout=1.0)
+    assert middleware.detector_status["redact_active"] == 1
+
+    try:
+        middleware.process_inbound(_scope("redact_limit_rejected"), "My name is Bob Stone")
+    except RedactorSaturatedError:
+        pass
+    else:
+        raise AssertionError("Expected second redact request to saturate")
+
+    saturated_status = middleware.detector_status
+    assert saturated_status["redact_active"] == 1
+    assert saturated_status["redact_saturated_count"] == 1
+    assert saturated_status["redact_max_concurrency"] == 1
+
+    engine.release.set()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert errors == []
+    assert middleware.detector_status["redact_active"] == 0
+
+
+def test_rehydrate_concurrency_saturation_fails_fast_and_releases_active_counter() -> None:
+    engine = _BlockingRehydrateEngine()
+    middleware = PIIMiddleware(
+        engine=engine,
+        rehydrate_max_concurrency=1,
+        concurrency_acquire_timeout_seconds=0.01,
+    )
+    scope = _scope("rehydrate_limit")
+    middleware.process_inbound(scope, "My name is Alice Jones")
+    errors: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            middleware.process_outbound(scope, "Hello <fn_1>")
+        except BaseException as exc:  # pragma: no cover - failure surfaced after join
+            errors.append(exc)
+
+    thread = Thread(target=_run)
+    thread.start()
+    assert engine.started.wait(timeout=1.0)
+    assert middleware.detector_status["rehydrate_active"] == 1
+
+    try:
+        middleware.process_outbound(scope, "Hello <fn_1>")
+    except RedactorSaturatedError:
+        pass
+    else:
+        raise AssertionError("Expected second rehydrate request to saturate")
+
+    saturated_status = middleware.detector_status
+    assert saturated_status["rehydrate_active"] == 1
+    assert saturated_status["rehydrate_saturated_count"] == 1
+    assert saturated_status["rehydrate_max_concurrency"] == 1
+
+    engine.release.set()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert errors == []
+    assert middleware.detector_status["rehydrate_active"] == 0
 
 
 def test_rehydrate_missing_scope_fail_open_returns_passthrough() -> None:
