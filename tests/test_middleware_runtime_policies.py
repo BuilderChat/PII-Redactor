@@ -45,6 +45,49 @@ class _FlakySaveStore:
         self._snapshots.pop(scope.key(), None)
 
 
+class _AlwaysFailingSaveStore:
+    def __init__(self) -> None:
+        self.save_calls = 0
+
+    def load(self, scope: ScopeContext) -> dict[str, object] | None:
+        del scope
+        return None
+
+    def save(
+        self,
+        scope: ScopeContext,
+        snapshot: dict[str, object],
+        *,
+        expires_at_epoch: float,
+        key_version: str,
+    ) -> None:
+        del scope, snapshot, expires_at_epoch, key_version
+        self.save_calls += 1
+        raise TimeoutError("temporary supabase timeout")
+
+    def delete(self, scope: ScopeContext) -> None:
+        del scope
+
+
+class _AlwaysFailingLoadStore:
+    def load(self, scope: ScopeContext) -> dict[str, object] | None:
+        del scope
+        raise TimeoutError("temporary load timeout")
+
+    def save(
+        self,
+        scope: ScopeContext,
+        snapshot: dict[str, object],
+        *,
+        expires_at_epoch: float,
+        key_version: str,
+    ) -> None:
+        del scope, snapshot, expires_at_epoch, key_version
+
+    def delete(self, scope: ScopeContext) -> None:
+        del scope
+
+
 class _AuthFailureStore:
     def load(self, scope: ScopeContext) -> dict[str, object] | None:
         del scope
@@ -155,8 +198,6 @@ def test_detector_status_reports_active_redact_request() -> None:
     assert not thread.is_alive()
     assert errors == []
     assert middleware.detector_status["redact_active"] == 0
-
-
 
 
 def test_redact_concurrency_saturation_fails_fast_and_releases_active_counter() -> None:
@@ -316,6 +357,114 @@ def test_persistence_writer_recovers_without_restart() -> None:
     assert metrics["persistence_save_count"] >= 1
     assert metrics["persistence_queue_lag_count"] >= 1
     assert store.save_calls >= 2
+
+
+def test_transient_save_degraded_allows_existing_in_memory_redact_scope() -> None:
+    scope = _scope("save_degraded_existing_redact")
+    store = _AlwaysFailingSaveStore()
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=store,
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+    )
+
+    first = middleware.process_inbound(scope, "My name is Alice Jones", fail_closed=True)
+    assert first.redacted_text == "redacted:My name is Alice Jones"
+    assert _wait_for(lambda: middleware.detector_status["persistence_healthy"] is False)
+
+    degraded = middleware.detector_status
+    assert degraded["persistence_status"] == "degraded_nonblocking"
+    assert degraded["persistence_state"] == "degraded_nonblocking"
+    assert degraded["persistence_last_error_category"] == "transient"
+    assert degraded["persistence_last_error_operation"] == "save"
+
+    second = middleware.process_inbound(scope, "My email is alice@example.com", fail_closed=True)
+    assert second.redacted_text == "redacted:My email is alice@example.com"
+    assert middleware.detector_status["persistence_blocking_requests"] == 0
+    assert _wait_for(lambda: store.save_calls >= 2)
+
+
+def test_transient_save_degraded_blocks_new_scope_that_would_need_load() -> None:
+    store = _AlwaysFailingSaveStore()
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=store,
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+    )
+
+    middleware.process_inbound(_scope("save_degraded_existing"), "My name is Alice Jones", fail_closed=True)
+    assert _wait_for(lambda: middleware.detector_status["persistence_healthy"] is False)
+
+    try:
+        middleware.process_inbound(_scope("save_degraded_new"), "My name is Bob Stone", fail_closed=True)
+    except PersistenceUnavailableError:
+        pass
+    else:
+        raise AssertionError("Expected degraded persistence to block a new fail-closed scope")
+
+    assert middleware.detector_status["persistence_blocking_requests"] == 1
+
+
+def test_transient_save_degraded_allows_existing_in_memory_rehydrate_scope() -> None:
+    scope = _scope("save_degraded_rehydrate")
+    store = _AlwaysFailingSaveStore()
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=store,
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+    )
+
+    middleware.process_inbound(scope, "My name is Alice Jones", fail_closed=True)
+    assert _wait_for(lambda: middleware.detector_status["persistence_healthy"] is False)
+
+    result = middleware.process_outbound(scope, "Hello <fn_1>", fail_closed=True)
+
+    assert result.clean_text == "clean:Hello <fn_1>"
+    assert middleware.detector_status["persistence_blocking_requests"] == 0
+
+
+def test_persistence_save_queue_full_fails_closed() -> None:
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=_AlwaysFailingSaveStore(),
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+    )
+    assert middleware._writer is not None
+
+    def _reject_save(*_args, **_kwargs) -> bool:
+        return False
+
+    middleware._writer.enqueue_save = _reject_save
+
+    try:
+        middleware.process_inbound(_scope("queue_full_redact"), "My name is Alice Jones", fail_closed=True)
+    except PersistenceUnavailableError:
+        pass
+    else:
+        raise AssertionError("Expected queue-full save to fail closed")
+
+    metrics = middleware.detector_status["performance_metrics"]
+    assert metrics["persistence_enqueue_full_count"] == 1
+
+
+def test_load_failure_missing_vault_still_fails_closed() -> None:
+    middleware = PIIMiddleware(
+        engine=_FakeEngine(),
+        vault_store=_AlwaysFailingLoadStore(),
+        persistence_mode="internal:supabase",
+        persistence_block_on_error=True,
+    )
+
+    try:
+        middleware.process_outbound(_scope("missing_load_failure"), "Hello <fn_1>", fail_closed=True)
+    except TimeoutError:
+        pass
+    else:
+        raise AssertionError("Expected missing-vault load failure to fail closed")
 
 
 def test_persistence_auth_failure_reports_unavailable_state() -> None:

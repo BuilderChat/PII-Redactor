@@ -154,6 +154,7 @@ Required scope fields on every request:
 - In `fail-closed` mode, unavailable redaction/rehydration returns HTTP `503`.
 - In `fail-open` mode, service returns passthrough text.
 - Persistence write failures are retried with cooldown-based recovery before the service stays blocked.
+- Transient persistence save failures report `degraded_nonblocking`; existing in-memory scopes can continue, but missing-vault loads, queue-full saves, and auth/schema/config failures still fail closed.
 
 ### Memory + Persistence Behavior
 

@@ -614,6 +614,9 @@ class PIIMiddleware:
         elif writer_status is None or writer_status.healthy:
             persistence_status = "healthy"
             persistence_state = "healthy"
+        elif self._persistence_block_on_error and self._is_nonblocking_persistence_state(writer_status):
+            persistence_status = "degraded_nonblocking"
+            persistence_state = "degraded_nonblocking"
         elif self._persistence_block_on_error:
             persistence_status = "blocking"
             persistence_state = writer_status.state
@@ -709,7 +712,10 @@ class PIIMiddleware:
         enqueue_seconds = 0.0
         try:
             gate_started = time.perf_counter()
-            self._ensure_persistence_healthy()
+            self._ensure_persistence_available(
+                scope,
+                allow_nonblocking_degraded=self._has_vault_in_memory(scope),
+            )
             gate_seconds = time.perf_counter() - gate_started
             self._metrics.record("redact_persistence_gate", gate_seconds)
             vault = self._get_or_create_vault(scope, fail_closed=fail_closed)
@@ -787,7 +793,10 @@ class PIIMiddleware:
         rehydrate_seconds = 0.0
         try:
             gate_started = time.perf_counter()
-            self._ensure_persistence_healthy()
+            self._ensure_persistence_available(
+                scope,
+                allow_nonblocking_degraded=self._has_vault_in_memory(scope),
+            )
             gate_seconds = time.perf_counter() - gate_started
             self._metrics.record("rehydrate_persistence_gate", gate_seconds)
             vault = self._get_vault(scope, fail_closed=fail_closed, allow_store_load=True)
@@ -874,7 +883,6 @@ class PIIMiddleware:
         LOGGER.info("session_end_success scope=%s status=vault_destroyed", scope.key())
         return True
 
-
     def _acquire_endpoint(self, endpoint: str) -> None:
         limiter = self._endpoint_limiters[endpoint]
         if limiter.acquire():
@@ -891,6 +899,20 @@ class PIIMiddleware:
 
     def _release_endpoint(self, endpoint: str) -> None:
         self._endpoint_limiters[endpoint].release()
+
+    def _has_vault_in_memory(self, scope: ScopeContext) -> bool:
+        with self._lock:
+            expired = self._prune_expired_locked(time.time())
+            self._cleanup_scope_entries(expired)
+            return scope.key() in self._vaults
+
+    def _is_nonblocking_persistence_state(self, writer_status: _PersistenceStateSnapshot) -> bool:
+        return (
+            writer_status.worker_alive
+            and writer_status.state == "degraded"
+            and writer_status.last_error_operation == "save"
+            and writer_status.last_error_category in {"transient", "backend", "unknown"}
+        )
 
     def _get_or_create_vault(self, scope: ScopeContext, *, fail_closed: bool) -> PIIVault:
         key = scope.key()
@@ -1012,23 +1034,43 @@ class PIIMiddleware:
         if not queued and fail_closed:
             raise PersistenceUnavailableError("Persistence queue full while saving vault snapshot")
 
-    def _ensure_persistence_healthy(self) -> None:
+    def _ensure_persistence_available(
+        self,
+        scope: ScopeContext,
+        *,
+        allow_nonblocking_degraded: bool,
+    ) -> None:
         if self._writer is None:
             return
         self._writer.ensure_worker_running()
         if self._persistence_block_on_error and not self._writer.healthy:
             self._writer.maybe_recover()
-        if self._persistence_block_on_error and not self._writer.healthy:
-            writer_status = self._writer.status_snapshot()
-            self._request_state.record_persistence_blocking_request()
-            LOGGER.warning(
-                "persistence_blocking_request state=%s error_category=%s queue_depth=%s queue_max=%s",
+        if not self._persistence_block_on_error or self._writer.healthy:
+            return
+
+        writer_status = self._writer.status_snapshot()
+        if allow_nonblocking_degraded and self._is_nonblocking_persistence_state(writer_status):
+            LOGGER.info(
+                "persistence_degraded_nonblocking_request op=%s scope_hash=%s state=%s error_category=%s queue_depth=%s",
+                writer_status.last_error_operation,
+                _scope_hash(scope),
                 writer_status.state,
                 writer_status.last_error_category,
                 self._writer.queue_depth,
-                self._persistence_queue_max,
             )
-            raise PersistenceUnavailableError("Persistence layer unhealthy")
+            return
+
+        self._request_state.record_persistence_blocking_request()
+        LOGGER.warning(
+            "persistence_blocking_request state=%s error_category=%s op=%s scope_hash=%s queue_depth=%s queue_max=%s",
+            writer_status.state,
+            writer_status.last_error_category,
+            writer_status.last_error_operation,
+            _scope_hash(scope),
+            self._writer.queue_depth,
+            self._persistence_queue_max,
+        )
+        raise PersistenceUnavailableError("Persistence layer unhealthy")
 
     def _prune_expired_locked(self, now_epoch: float) -> list[tuple[str, _VaultEntry]]:
         expired_keys = [
