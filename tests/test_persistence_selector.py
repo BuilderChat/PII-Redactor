@@ -43,6 +43,7 @@ def _settings(**overrides: object) -> Settings:
         supabase_service_role_key="",
         supabase_table="pii_vault_snapshots",
         persistence_master_key="",
+        supabase_request_timeout_seconds=15,
         allowlist_cache_enabled=True,
         allowlist_cache_dir=".cache/non_name_allowlists",
         allowlist_cache_max_terms=50000,
@@ -167,3 +168,38 @@ def test_supabase_runtime_error_classifies_http_status(monkeypatch) -> None:
         assert "Service Unavailable" not in str(exc)
         return
     raise AssertionError("Expected PersistenceRuntimeError")
+
+
+def test_supabase_request_uses_configured_timeout(monkeypatch) -> None:
+    store, _mode = build_vault_store(
+        _settings(
+            persistence_mode="internal",
+            internal_store_impl="supabase",
+            supabase_url="https://example.supabase.co",
+            supabase_service_role_key="service_role",
+            persistence_master_key="master_key",
+            supabase_request_timeout_seconds=17,
+        )
+    )
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b"[]"
+
+    def fake_urlopen(_req, *, timeout):
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(persistence.urlrequest, "urlopen", fake_urlopen)
+
+    result = store.load(types.SimpleNamespace(key=lambda: "scope_key"))
+
+    assert result is None
+    assert captured["timeout"] == 17

@@ -162,6 +162,7 @@ class SupabaseVaultStore:
         service_role_key: str,
         table: str,
         master_key: str,
+        request_timeout_seconds: int = 15,
     ) -> None:
         try:
             from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
@@ -187,6 +188,7 @@ class SupabaseVaultStore:
         self._service_role_key = service_role_key
         self._table = table
         self._cipher = _ScopeCipher(master_key)
+        self._request_timeout_seconds = max(1, int(request_timeout_seconds))
 
     def load(self, scope: ScopeContext) -> dict[str, object] | None:
         params = {
@@ -284,7 +286,7 @@ class SupabaseVaultStore:
 
         req = urlrequest.Request(url=url, method=method, headers=headers, data=payload)
         try:
-            with urlrequest.urlopen(req, timeout=5) as resp:
+            with urlrequest.urlopen(req, timeout=self._request_timeout_seconds) as resp:
                 raw = resp.read()
                 if not raw:
                     return None
@@ -343,6 +345,7 @@ def build_vault_store(
                 service_role_key=settings.supabase_service_role_key,
                 table=settings.supabase_table,
                 master_key=settings.persistence_master_key,
+                request_timeout_seconds=settings.supabase_request_timeout_seconds,
             )
             return store, "internal:supabase"
         raise PersistenceConfigError(

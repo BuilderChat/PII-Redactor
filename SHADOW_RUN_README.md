@@ -25,7 +25,7 @@ Status: implemented scaffold in CentralApp (default-off, fail-open, non-blocking
 | `CHAT_REDACTION_SHADOW_MAX_CONCURRENCY` | int | `24` | Max concurrent in-flight shadow workers. |
 | `CHAT_REDACTION_PREWARM_ENABLED` | bool | `true` | Non-blocking startup prewarm for in-process redactor runtime (chat role only). |
 | `CHAT_REDACTION_PREWARM_DELAY_SECS` | float | `0.0` | Delay before non-blocking prewarm task runs after startup. |
-| `CHAT_REDACTION_REQUEST_TIMEOUT_MS` | int | `5000` | Reserved for parity with service mode; not used by in-process path. |
+| `CHAT_REDACTION_REQUEST_TIMEOUT_MS` | int | `15000` | Service-mode redactor HTTP timeout. |
 | `CHAT_REDACTION_FAIL_OPEN` | bool | `true` | Shadow redactor failures log and continue without impacting V1. |
 | `CHAT_REDACTION_REDACTOR_BASE_URL` | string | unset | Legacy service-mode setting; ignored by current in-process integration. |
 | `CHAT_REDACTION_REDACTOR_API_KEY` | string | unset | Legacy service-mode setting; ignored by current in-process integration. |
@@ -55,6 +55,7 @@ These are read directly by CentralApp’s in-process redactor runtime.
 | `PII_REDACTOR_SUPABASE_URL` | string | unset | Supabase project URL for internal persistence mode. |
 | `PII_REDACTOR_SUPABASE_SERVICE_ROLE_KEY` | string | unset | Supabase service role key for internal persistence mode. |
 | `PII_REDACTOR_SUPABASE_TABLE` | string | `pii_vault_snapshots` | Target table for encrypted vault snapshots. |
+| `PII_REDACTOR_SUPABASE_REQUEST_TIMEOUT_SECONDS` | int | `15` | Supabase HTTP request timeout for vault snapshot persistence. |
 | `PII_REDACTOR_ALLOWLIST_CACHE_ENABLED` | bool | `true` | Enables local allowlist cache used by shadow DB refreshes. |
 | `PII_REDACTOR_ALLOWLIST_CACHE_DIR` | string | `.cache/non_name_allowlists` | Local cache dir for compiled allowlist term sets. |
 | `PII_REDACTOR_ALLOWLIST_CACHE_MAX_TERMS` | int | `50000` | Maximum allowlist terms retained per scope. |

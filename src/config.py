@@ -47,6 +47,7 @@ class Settings:
     supabase_service_role_key: str
     supabase_table: str
     persistence_master_key: str
+    supabase_request_timeout_seconds: int
     allowlist_cache_enabled: bool
     allowlist_cache_dir: str
     allowlist_cache_max_terms: int
@@ -138,6 +139,7 @@ def get_settings() -> Settings:
         supabase_service_role_key=os.getenv("PII_REDACTOR_SUPABASE_SERVICE_ROLE_KEY", "").strip(),
         supabase_table=os.getenv("PII_REDACTOR_SUPABASE_TABLE", "pii_vault_snapshots").strip() or "pii_vault_snapshots",
         persistence_master_key=os.getenv("PII_REDACTOR_PERSISTENCE_MASTER_KEY", "").strip(),
+        supabase_request_timeout_seconds=max(1, _env_int("PII_REDACTOR_SUPABASE_REQUEST_TIMEOUT_SECONDS", 15)),
         allowlist_cache_enabled=_env_bool("PII_REDACTOR_ALLOWLIST_CACHE_ENABLED", True),
         allowlist_cache_dir=os.getenv("PII_REDACTOR_ALLOWLIST_CACHE_DIR", ".cache/non_name_allowlists").strip()
         or ".cache/non_name_allowlists",
