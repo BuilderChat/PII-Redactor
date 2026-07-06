@@ -267,6 +267,10 @@ Multi-instance mode (recommended for scale):
 - Use a shared persistence backend so any instance can rehydrate.
 - Keep `thread_id` stable per conversation.
 - Monitor `/health` fields:
+  - `redact_active`, `rehydrate_active`
+  - `redact_saturated_count`, `rehydrate_saturated_count`
+  - `persistence_queue_depth`, `persistence_queue_max`
+  - `persistence_blocking_requests`
   - `status`
   - `persistence_status`
   - `persistence_state`

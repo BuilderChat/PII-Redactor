@@ -125,6 +125,12 @@ class SessionEndResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     active_sessions: int
+    redact_active: int = 0
+    rehydrate_active: int = 0
+    redact_max_concurrency: int = 0
+    rehydrate_max_concurrency: int = 0
+    redact_saturated_count: int = 0
+    rehydrate_saturated_count: int = 0
     presidio_enabled: bool
     gliner_enabled: bool
     require_gliner: bool
@@ -153,6 +159,8 @@ class HealthResponse(BaseModel):
     persistence_next_recovery_at: str | None = None
     persistence_recovery_cooldown_seconds: int = 0
     persistence_queue_depth: int
+    persistence_queue_max: int = 0
+    persistence_blocking_requests: int = 0
     performance_metrics: dict[str, int | float] = Field(default_factory=dict)
     scope_ttl_seconds: int
     max_active_scopes: int

@@ -102,7 +102,15 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
             "persistence_last_recovery_attempt_at": "2026-06-02T12:00:30Z",
             "persistence_next_recovery_at": "2026-06-02T12:01:00Z",
             "persistence_recovery_cooldown_seconds": 30,
+            "redact_active": 1,
+            "rehydrate_active": 2,
+            "redact_max_concurrency": 0,
+            "rehydrate_max_concurrency": 0,
+            "redact_saturated_count": 3,
+            "rehydrate_saturated_count": 4,
             "persistence_queue_depth": 4,
+            "persistence_queue_max": 12,
+            "persistence_blocking_requests": 5,
             "performance_metrics": {
                 "redact_total_count": 2,
                 "redact_total_avg_ms": 12.5,
@@ -128,4 +136,11 @@ def test_health_reports_degraded_persistence_details(monkeypatch) -> None:
     assert response.persistence_last_error_category == "transient"
     assert response.persistence_last_error_operation == "save"
     assert response.persistence_recovery_attempts == 1
+    assert response.redact_active == 1
+    assert response.rehydrate_active == 2
+    assert response.redact_saturated_count == 3
+    assert response.rehydrate_saturated_count == 4
+    assert response.persistence_queue_depth == 4
+    assert response.persistence_queue_max == 12
+    assert response.persistence_blocking_requests == 5
     assert response.performance_metrics["redact_total_count"] == 2

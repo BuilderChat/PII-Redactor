@@ -109,6 +109,40 @@ class _RuntimeMetrics:
             return result
 
 
+class _RuntimeRequestState:
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._active: dict[str, int] = {"redact": 0, "rehydrate": 0}
+        self._saturated: dict[str, int] = {"redact": 0, "rehydrate": 0}
+        self._persistence_blocking_requests = 0
+
+    def enter(self, endpoint: str) -> None:
+        with self._lock:
+            self._active[endpoint] = self._active.get(endpoint, 0) + 1
+
+    def exit(self, endpoint: str) -> None:
+        with self._lock:
+            self._active[endpoint] = max(0, self._active.get(endpoint, 0) - 1)
+
+    def record_saturated(self, endpoint: str) -> None:
+        with self._lock:
+            self._saturated[endpoint] = self._saturated.get(endpoint, 0) + 1
+
+    def record_persistence_blocking_request(self) -> None:
+        with self._lock:
+            self._persistence_blocking_requests += 1
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "redact_active": self._active.get("redact", 0),
+                "rehydrate_active": self._active.get("rehydrate", 0),
+                "redact_saturated_count": self._saturated.get("redact", 0),
+                "rehydrate_saturated_count": self._saturated.get("rehydrate", 0),
+                "persistence_blocking_requests": self._persistence_blocking_requests,
+            }
+
+
 class _AsyncPersistenceWriter:
     def __init__(
         self,
@@ -474,6 +508,7 @@ class PIIMiddleware:
         settings = get_settings()
         self.engine = engine or PIIEngine()
         self._metrics = _RuntimeMetrics()
+        self._request_state = _RuntimeRequestState()
         self._lock = RLock()
         self._vaults: OrderedDict[str, _VaultEntry] = OrderedDict()
         self._store = vault_store
@@ -500,6 +535,7 @@ class PIIMiddleware:
             settings.persistence_key_version if persistence_key_version is None else persistence_key_version
         )
         queue_max = settings.persistence_queue_max if persistence_queue_max is None else max(1, int(persistence_queue_max))
+        self._persistence_queue_max = queue_max if vault_store else 0
         self._writer = (
             _AsyncPersistenceWriter(
                 vault_store,
@@ -537,9 +573,16 @@ class PIIMiddleware:
         else:
             persistence_status = writer_status.state
             persistence_state = writer_status.state
+        request_status = self._request_state.snapshot()
         status = dict(self.engine.runtime_info)
         status.update(
             {
+                "redact_active": request_status["redact_active"],
+                "rehydrate_active": request_status["rehydrate_active"],
+                "redact_max_concurrency": 0,
+                "rehydrate_max_concurrency": 0,
+                "redact_saturated_count": request_status["redact_saturated_count"],
+                "rehydrate_saturated_count": request_status["rehydrate_saturated_count"],
                 "persistence_enabled": self._store is not None,
                 "persistence_mode": self._persistence_mode,
                 "persistence_status": persistence_status,
@@ -591,6 +634,8 @@ class PIIMiddleware:
                     else self._persistence_recovery_cooldown_seconds
                 ),
                 "persistence_queue_depth": self._writer.queue_depth if self._writer is not None else 0,
+                "persistence_queue_max": self._persistence_queue_max,
+                "persistence_blocking_requests": request_status["persistence_blocking_requests"],
                 "performance_metrics": self._metrics.snapshot(),
                 "scope_ttl_seconds": self._vault_ttl_seconds,
                 "max_active_scopes": self._max_active_scopes,
@@ -609,6 +654,7 @@ class PIIMiddleware:
         fail_closed: bool = True,
     ) -> RedactionResult:
         LOGGER.info("redact_start scope=%s", scope.key())
+        self._request_state.enter("redact")
         started = time.perf_counter()
         gate_seconds = 0.0
         detector_seconds = 0.0
@@ -674,6 +720,8 @@ class PIIMiddleware:
             if fail_closed:
                 raise
             return RedactionResult(redacted_text=raw_user_message, replacements={}, active_profile=1)
+        finally:
+            self._request_state.exit("redact")
 
     def process_outbound(
         self,
@@ -683,6 +731,7 @@ class PIIMiddleware:
         fail_closed: bool = True,
     ) -> RehydrationResult:
         LOGGER.info("rehydrate_start scope=%s", scope.key())
+        self._request_state.enter("rehydrate")
         started = time.perf_counter()
         gate_seconds = 0.0
         rehydrate_seconds = 0.0
@@ -746,6 +795,8 @@ class PIIMiddleware:
                 repaired_text=llm_response,
                 repaired_placeholders=False,
             )
+        finally:
+            self._request_state.exit("rehydrate")
 
     def end_session(self, scope: ScopeContext, *, fail_closed: bool = True) -> bool:
         LOGGER.info("session_end_start scope=%s", scope.key())
@@ -758,8 +809,15 @@ class PIIMiddleware:
             return False
         if self._writer is not None:
             queued = self._writer.enqueue_delete(scope)
+            if not queued:
+                LOGGER.warning(
+                    "persistence_queue_full op=delete scope_hash=%s fail_closed=%s queue_depth=%s queue_max=%s",
+                    _scope_hash(scope),
+                    fail_closed,
+                    self._writer.queue_depth,
+                    self._persistence_queue_max,
+                )
             if not queued and fail_closed:
-                LOGGER.warning("session_end_failure scope=%s fail_closed=%s reason=queue_full", scope.key(), fail_closed)
                 raise PersistenceUnavailableError("Persistence queue full while ending session")
         vault.destroy()
         LOGGER.info("session_end_success scope=%s status=vault_destroyed", scope.key())
@@ -875,6 +933,13 @@ class PIIMiddleware:
         )
         if not queued:
             self._metrics.record("persistence_enqueue_full", 0.0)
+            LOGGER.warning(
+                "persistence_queue_full op=save scope_hash=%s fail_closed=%s queue_depth=%s queue_max=%s",
+                _scope_hash(scope),
+                fail_closed,
+                self._writer.queue_depth,
+                self._persistence_queue_max,
+            )
         if not queued and fail_closed:
             raise PersistenceUnavailableError("Persistence queue full while saving vault snapshot")
 
@@ -885,6 +950,15 @@ class PIIMiddleware:
         if self._persistence_block_on_error and not self._writer.healthy:
             self._writer.maybe_recover()
         if self._persistence_block_on_error and not self._writer.healthy:
+            writer_status = self._writer.status_snapshot()
+            self._request_state.record_persistence_blocking_request()
+            LOGGER.warning(
+                "persistence_blocking_request state=%s error_category=%s queue_depth=%s queue_max=%s",
+                writer_status.state,
+                writer_status.last_error_category,
+                self._writer.queue_depth,
+                self._persistence_queue_max,
+            )
             raise PersistenceUnavailableError("Persistence layer unhealthy")
 
     def _prune_expired_locked(self, now_epoch: float) -> list[tuple[str, _VaultEntry]]:

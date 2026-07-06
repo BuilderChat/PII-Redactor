@@ -215,6 +215,12 @@ def health() -> HealthResponse:
     return HealthResponse(
         status=service_status,
         active_sessions=middleware.active_sessions,
+        redact_active=int(detector_status.get("redact_active", 0)),
+        rehydrate_active=int(detector_status.get("rehydrate_active", 0)),
+        redact_max_concurrency=int(detector_status.get("redact_max_concurrency", 0)),
+        rehydrate_max_concurrency=int(detector_status.get("rehydrate_max_concurrency", 0)),
+        redact_saturated_count=int(detector_status.get("redact_saturated_count", 0)),
+        rehydrate_saturated_count=int(detector_status.get("rehydrate_saturated_count", 0)),
         commit=os.getenv("REDACTOR_COMMIT", "unknown"),
         presidio_enabled=bool(detector_status.get("presidio_enabled")),
         gliner_enabled=bool(detector_status.get("gliner_enabled")),
@@ -286,6 +292,8 @@ def health() -> HealthResponse:
             detector_status.get("persistence_recovery_cooldown_seconds", 0)
         ),
         persistence_queue_depth=int(detector_status.get("persistence_queue_depth", 0)),
+        persistence_queue_max=int(detector_status.get("persistence_queue_max", 0)),
+        persistence_blocking_requests=int(detector_status.get("persistence_blocking_requests", 0)),
         performance_metrics=dict(detector_status.get("performance_metrics", {})),
         scope_ttl_seconds=int(detector_status.get("scope_ttl_seconds", 0)),
         max_active_scopes=int(detector_status.get("max_active_scopes", 0)),

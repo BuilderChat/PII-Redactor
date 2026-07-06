@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from threading import Event, Thread
 
 from src.middleware import PIIMiddleware, PersistenceUnavailableError
 from src.persistence import PersistenceRuntimeError
@@ -94,6 +95,18 @@ class _FakeEngine:
         )
 
 
+class _BlockingEngine(_FakeEngine):
+    def __init__(self) -> None:
+        self.started = Event()
+        self.release = Event()
+
+    def redact(self, raw_user_message, vault, **_kwargs) -> RedactionResult:
+        self.started.set()
+        if not self.release.wait(timeout=2.0):
+            raise TimeoutError("blocking test engine timed out")
+        return super().redact(raw_user_message, vault, **_kwargs)
+
+
 def _wait_for(predicate, *, timeout: float = 3.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -101,6 +114,35 @@ def _wait_for(predicate, *, timeout: float = 3.0) -> bool:
             return True
         time.sleep(0.05)
     return predicate()
+
+
+def test_detector_status_reports_active_redact_request() -> None:
+    engine = _BlockingEngine()
+    middleware = PIIMiddleware(engine=engine)
+    errors: list[BaseException] = []
+
+    def _run() -> None:
+        try:
+            middleware.process_inbound(_scope("active_redact"), "My name is Alice Jones")
+        except BaseException as exc:  # pragma: no cover - failure surfaced after join
+            errors.append(exc)
+
+    thread = Thread(target=_run)
+    thread.start()
+    assert engine.started.wait(timeout=1.0)
+
+    status = middleware.detector_status
+    assert status["redact_active"] == 1
+    assert status["rehydrate_active"] == 0
+    assert status["redact_saturated_count"] == 0
+    assert status["rehydrate_saturated_count"] == 0
+    assert status["persistence_blocking_requests"] == 0
+
+    engine.release.set()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert errors == []
+    assert middleware.detector_status["redact_active"] == 0
 
 
 def test_rehydrate_missing_scope_fail_open_returns_passthrough() -> None:
@@ -202,6 +244,17 @@ def test_persistence_auth_failure_reports_unavailable_state() -> None:
     assert status["persistence_last_error_status_code"] == 403
     assert status["persistence_unhealthy_since"] is not None
     assert status["persistence_next_recovery_at"] is None
+
+    try:
+        middleware.process_inbound(_scope("auth_failure_blocked"), "My phone is 555-010-1212", fail_closed=True)
+    except PersistenceUnavailableError:
+        pass
+    else:
+        raise AssertionError("Expected unhealthy persistence to block the next fail-closed request")
+
+    blocked_status = middleware.detector_status
+    assert blocked_status["persistence_blocking_requests"] == 1
+    assert blocked_status["persistence_queue_max"] >= 1
 
 
 def test_persistence_worker_restarts_when_thread_is_dead() -> None:
