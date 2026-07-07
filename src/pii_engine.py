@@ -20,9 +20,15 @@ PHONE_RE = re.compile(
 )
 NAME_WORD_PATTERN = r"[^\W\d_]+(?:['\-][^\W\d_]+)*"
 NAME_INTRO_RE = re.compile(
-    r"\b(?P<cue>my\s+n(?:ame|ae|me)\s+is|i\s+am|i'm|this\s+is)\s+"
+    r"\b(?P<cue>my\s+n(?:ame|ae|me)s?(?:\s+is)?|i\s+am|i'm|this\s+is)\s+"
     r"(?P<candidate>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,4})",
     re.IGNORECASE,
+)
+CASUAL_IM_NAME_INTRO_RE = re.compile(
+    rf"(?P<prefix>\b(?:(?:hi|hello|hey)\b[\s,!.]*){{1,4}})"
+    rf"(?P<cue>i\s*m|im)\s+(?P<name>{NAME_WORD_PATTERN})\b"
+    r"(?P<tail>\s+(?:how\s+are\s+you|nice\s+to\s+meet\s+you|thanks?|thank\s+you)\b)?",
+    re.IGNORECASE | re.UNICODE,
 )
 NAME_REPLY_RE = re.compile(r"^\s*[A-Z][A-Za-z'\-]*(?:\s+[A-Z][A-Za-z'\-]*){0,4}[.!?]?\s*$")
 ACKNOWLEDGEMENT_PREFIX_RE = re.compile(
@@ -172,6 +178,7 @@ NAME_NOISE_WORDS = {
 }
 NAME_CONTEXT_CUES = (
     "my name is",
+    "my names",
     "my nae is",
     "my nme is",
     "name is",
@@ -1028,6 +1035,7 @@ class PIIEngine:
             )
         spans.extend(self._detect_email_phone_spans_presidio(text))
         spans.extend(self._detect_email_phone_spans_regex(text))
+        spans.extend(self._detect_prompted_spaced_email_spans(text, previous_assistant_message))
 
         if not suppress_name_detection:
             spans.extend(self._detect_leading_name_with_contact_spans(text, non_name_terms=runtime_non_name_terms))
@@ -2162,6 +2170,34 @@ class PIIEngine:
 
         return spans
 
+    def _detect_prompted_spaced_email_spans(
+        self,
+        text: str,
+        previous_assistant_message: str | None,
+    ) -> list[Span]:
+        if not self._assistant_requests_email_contact(previous_assistant_message):
+            return []
+
+        spans: list[Span] = []
+        for match in EMAIL_RE.finditer(text):
+            prefix = text[: match.start()]
+            fragment_match = re.search(r"(?P<fragment>[A-Za-z0-9._%+-]{1,8})\s+$", prefix)
+            if not fragment_match:
+                continue
+
+            fragment = fragment_match.group("fragment")
+            if not any(char.isdigit() for char in fragment):
+                continue
+
+            local_part = match.group(0).split("@", 1)[0]
+            if len(local_part) >= 6:
+                continue
+
+            value = f"{fragment}{match.group(0)}"
+            spans.append(Span(fragment_match.start("fragment"), match.end(), "em", value))
+
+        return spans
+
     def _detect_email_phone_spans_presidio(self, text: str) -> list[Span]:
         if self._presidio_analyzer is None:
             return []
@@ -2285,15 +2321,24 @@ class PIIEngine:
                 match.start("candidate") + keep_chars,
                 assistant_requests_name=assistant_requests_name,
                 non_name_terms=non_name_terms,
-                ):
-                    spans.append(
-                        Span(
-                            match.start("candidate"),
-                            match.start("candidate") + keep_chars,
+            ):
+                spans.append(
+                    Span(
+                        match.start("candidate"),
+                        match.start("candidate") + keep_chars,
                         "name",
                         value,
                     )
                 )
+
+        for match in CASUAL_IM_NAME_INTRO_RE.finditer(text):
+            value = match.group("name")
+            normalized = value.lower()
+            if normalized in NON_NAME_SINGLE_WORDS or normalized in non_name_terms:
+                continue
+            if self._is_blocked_name_token(normalized):
+                continue
+            spans.append(Span(match.start("name"), match.end("name"), "fn", value))
 
         for match in COORDINATED_FULL_NAMES_RE.finditer(text):
             context_before = text[max(0, match.start() - 70) : match.start()].lower()
@@ -2847,6 +2892,23 @@ class PIIEngine:
             or any(cue in normalized for cue in ASSISTANT_FIRST_NAME_REQUEST_CUES)
             or any(cue in normalized for cue in ASSISTANT_LAST_NAME_REQUEST_CUES)
             or any(cue in normalized for cue in ASSISTANT_FULL_NAME_REQUEST_CUES)
+        )
+
+    @staticmethod
+    def _assistant_requests_email_contact(previous_assistant_message: str | None) -> bool:
+        if not previous_assistant_message:
+            return False
+        normalized = re.sub(r"\s+", " ", previous_assistant_message.strip().lower())
+        return (
+            "email" in normalized
+            and (
+                "reach you" in normalized
+                or "contact" in normalized
+                or "best email" in normalized
+                or "your email" in normalized
+                or "email address" in normalized
+                or "email or phone" in normalized
+            )
         )
 
     @staticmethod

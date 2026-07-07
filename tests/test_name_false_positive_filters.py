@@ -36,6 +36,15 @@ def test_still_redacts_explicit_name_intro() -> None:
     assert _redact(text) == "My name is <fn_1> <ln_1>"
 
 
+def test_punctuation_light_my_names_intro_redacts_first_name() -> None:
+    assert _redact("My names ken") == "My names <fn_1>"
+
+
+def test_casual_greeting_im_intro_redacts_first_name_only() -> None:
+    assert _redact("hi hi hi im jon") == "hi hi hi im <fn_1>"
+    assert _redact("hi hi hi im ken how are you") == "hi hi hi im <fn_1> how are you"
+
+
 def test_explicit_name_intro_stops_before_question_tail() -> None:
     text = "hi my name is jon how are you"
     assert _redact(text) == "hi my name is <fn_1> how are you"
@@ -256,6 +265,7 @@ def test_direction_plus_city_phrase_is_not_name() -> None:
 
 
 def test_im_sentence_fragment_is_not_redacted() -> None:
+    assert _redact("im looking for homes") == "im looking for homes"
     assert _redact("I'm wanting land as well") == "I'm wanting land as well"
     assert _redact("I'm ready") == "I'm ready"
     assert _redact("I'm contractor and would like to become a trade partner") == (
@@ -573,6 +583,25 @@ def test_first_name_prompt_with_inline_email_and_phone_redacts_first_name() -> N
     prompt = "Please provide your first name, email, and phone number."
     text = "John, john@example.com 123-465-7890"
     assert _redact(text, previous_assistant_message=prompt) == "<fn_1>, <em_1> <ph_1>"
+
+
+def test_email_prompt_joins_short_digit_fragment_before_email() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    prompt = "Just for backup, what's the best email to reach you at?"
+    result = engine.redact("Brenda J5 19@yahoo.com.", vault, previous_assistant_message=prompt)
+    assert result.redacted_text == "Brenda <em_1>."
+    assert vault.items()["<em_1>"] == "J519@yahoo.com"
+
+
+def test_spaced_email_join_requires_email_prompt_and_digit_fragment() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    prompt = "Just for backup, what's the best email to reach you at?"
+    result = engine.redact("Brenda abc 19@yahoo.com.", vault, previous_assistant_message=prompt)
+    assert result.redacted_text == "<fn_1> <ln_1> <em_1>."
+    assert vault.items()["<em_1>"] == "19@yahoo.com"
+    assert _redact("Brenda J5 19@yahoo.com.") == "Brenda J5 <em_1>."
 
 
 def test_last_name_labelled_reply_without_colon_is_still_redacted() -> None:

@@ -4,7 +4,7 @@
 
 - `src/server.py`: FastAPI app, auth guard, REST endpoints (`/redact`, `/rehydrate`, `/session/end`, `/allowlist/refresh`, `/health`) with detector, request, and persistence diagnostics.
 - `src/middleware.py`: Request orchestration, vault lifecycle, endpoint concurrency limits, persistence queue, persistence degraded policy, fail-open/closed behavior, and runtime health counters.
-- `src/pii_engine.py`: Detection/redaction/rehydration logic. The `slm` branch defaults to tuned heuristics; GLiNER/Presidio remain optional when full dependencies are installed.
+- `src/pii_engine.py`: Detection/redaction/rehydration logic. The `slm` branch defaults to tuned heuristics; GLiNER/Presidio remain optional when full dependencies are installed. Includes conservative handling for explicit/punctuation-light name intros and email-prompt-only spaced email fragments.
 - `src/pii_vault.py`: Scoped token/value store and snapshot serialization.
 - `src/persistence.py`: Vault persistence selector and stores (`none`, `internal`, `external`).
 - `src/allowlist_cache.py`: Local per-assistant allowlist cache, selector-based extraction, atomic snapshot writes.
@@ -36,6 +36,6 @@
 - `tests/test_persistence_selector.py`: Persistence mode/build validation.
 - `tests/test_schemas_contract.py`: Request schema validation and behavior.
 - `tests/test_middleware_*.py`: Scope isolation and runtime policies.
-- `tests/test_name_false_positive_filters.py`: Name redaction tuning regression coverage.
+- `tests/test_name_false_positive_filters.py`: Name redaction tuning regression coverage, including punctuation-light self-introductions and prompt-aware spaced email fragments.
 - `tests/test_transcript_cleaner.py`: Offline transcript cleaning behavior and assistant-role compatibility coverage.
 - `tests/test_shadow_live_transcript_cleaner.py`: Live-section extraction and cleaning coverage for shadow export transcript files.
