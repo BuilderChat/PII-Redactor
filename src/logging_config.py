@@ -98,9 +98,10 @@ def configure_logging(*, log_level: str, log_format: str, access_logs: bool) -> 
     handler.setFormatter(_build_formatter(_resolve_log_format(log_format)))
     logging.basicConfig(level=resolved_level, handlers=[handler], force=True)
 
-    uvicorn_error_logger = logging.getLogger("uvicorn.error")
-    uvicorn_error_logger.handlers.clear()
-    uvicorn_error_logger.propagate = True
+    for logger_name in ("uvicorn", "uvicorn.error"):
+        uvicorn_logger = logging.getLogger(logger_name)
+        uvicorn_logger.handlers.clear()
+        uvicorn_logger.propagate = True
 
     logging.getLogger("uvicorn.access").disabled = not bool(access_logs)
     if not access_logs:
