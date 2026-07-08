@@ -75,3 +75,14 @@ def test_configure_logging_can_keep_uvicorn_access_logs(monkeypatch) -> None:
 
     assert level == logging.WARNING
     assert access_logger.disabled is False
+
+
+def test_configure_logging_routes_uvicorn_lifecycle_logs_through_root_formatter() -> None:
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    uvicorn_error_logger.addHandler(logging.NullHandler())
+    uvicorn_error_logger.propagate = False
+
+    logging_config.configure_logging(log_level="INFO", log_format="json", access_logs=False)
+
+    assert uvicorn_error_logger.handlers == []
+    assert uvicorn_error_logger.propagate is True
