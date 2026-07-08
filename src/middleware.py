@@ -371,7 +371,7 @@ class _AsyncPersistenceWriter:
                 if self._metrics is not None:
                     self._metrics.record("persistence_queue_lag", queue_lag_seconds)
                     self._metrics.record(f"persistence_{task.op}", elapsed_seconds)
-                LOGGER.info(
+                LOGGER.debug(
                     "persistence_task_timing mode=%s op=%s scope_hash=%s duration_ms=%.2f queue_lag_ms=%.2f queue_depth=%s",
                     self._persistence_mode,
                     task.op,
@@ -704,7 +704,7 @@ class PIIMiddleware:
         fail_closed: bool = True,
     ) -> RedactionResult:
         self._acquire_endpoint("redact")
-        LOGGER.info("redact_start scope=%s", scope.key())
+        LOGGER.debug("redact_start scope_hash=%s", _scope_hash(scope))
         self._request_state.enter("redact")
         started = time.perf_counter()
         gate_seconds = 0.0
@@ -743,13 +743,13 @@ class PIIMiddleware:
             self._metrics.record("redact_persist_enqueue", enqueue_seconds)
             total_seconds = time.perf_counter() - started
             self._metrics.record("redact_total", total_seconds)
-            LOGGER.info(
-                "redact_success scope=%s profile=%s replacements=%s",
-                scope.key(),
+            LOGGER.debug(
+                "redact_success scope_hash=%s profile=%s replacements=%s",
+                _scope_hash(scope),
                 result.active_profile,
                 len(result.replacements),
             )
-            LOGGER.info(
+            LOGGER.debug(
                 "redact_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f detector_ms=%.2f persist_enqueue_ms=%.2f queue_depth=%s",
                 _scope_hash(scope),
                 total_seconds * 1000.0,
@@ -762,7 +762,7 @@ class PIIMiddleware:
         except Exception as exc:
             total_seconds = time.perf_counter() - started
             self._metrics.record("redact_failure_total", total_seconds)
-            LOGGER.info(
+            LOGGER.debug(
                 "redact_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f detector_ms=%.2f persist_enqueue_ms=%.2f status=failure",
                 _scope_hash(scope),
                 total_seconds * 1000.0,
@@ -770,7 +770,12 @@ class PIIMiddleware:
                 detector_seconds * 1000.0,
                 enqueue_seconds * 1000.0,
             )
-            LOGGER.warning("redact_failure scope=%s fail_closed=%s error=%s", scope.key(), fail_closed, exc)
+            LOGGER.warning(
+                "redact_failure scope_hash=%s fail_closed=%s error_type=%s",
+                _scope_hash(scope),
+                fail_closed,
+                type(exc).__name__,
+            )
             if fail_closed:
                 raise
             return RedactionResult(redacted_text=raw_user_message, replacements={}, active_profile=1)
@@ -786,7 +791,7 @@ class PIIMiddleware:
         fail_closed: bool = True,
     ) -> RehydrationResult:
         self._acquire_endpoint("rehydrate")
-        LOGGER.info("rehydrate_start scope=%s", scope.key())
+        LOGGER.debug("rehydrate_start scope_hash=%s", _scope_hash(scope))
         self._request_state.enter("rehydrate")
         started = time.perf_counter()
         gate_seconds = 0.0
@@ -805,7 +810,7 @@ class PIIMiddleware:
                     raise PersistenceUnavailableError("Vault not found for scoped rehydration")
                 total_seconds = time.perf_counter() - started
                 self._metrics.record("rehydrate_total", total_seconds)
-                LOGGER.info(
+                LOGGER.debug(
                     "rehydrate_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f rehydrate_ms=0.00 status=missing_vault_fail_open",
                     _scope_hash(scope),
                     total_seconds * 1000.0,
@@ -822,12 +827,12 @@ class PIIMiddleware:
             self._metrics.record("rehydrate_engine", rehydrate_seconds)
             total_seconds = time.perf_counter() - started
             self._metrics.record("rehydrate_total", total_seconds)
-            LOGGER.info(
-                "rehydrate_success scope=%s repaired_placeholders=%s",
-                scope.key(),
+            LOGGER.debug(
+                "rehydrate_success scope_hash=%s repaired_placeholders=%s",
+                _scope_hash(scope),
                 result.repaired_placeholders,
             )
-            LOGGER.info(
+            LOGGER.debug(
                 "rehydrate_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f rehydrate_ms=%.2f queue_depth=%s",
                 _scope_hash(scope),
                 total_seconds * 1000.0,
@@ -839,14 +844,19 @@ class PIIMiddleware:
         except Exception as exc:
             total_seconds = time.perf_counter() - started
             self._metrics.record("rehydrate_failure_total", total_seconds)
-            LOGGER.info(
+            LOGGER.debug(
                 "rehydrate_timing scope_hash=%s total_ms=%.2f persistence_gate_ms=%.2f rehydrate_ms=%.2f status=failure",
                 _scope_hash(scope),
                 total_seconds * 1000.0,
                 gate_seconds * 1000.0,
                 rehydrate_seconds * 1000.0,
             )
-            LOGGER.warning("rehydrate_failure scope=%s fail_closed=%s error=%s", scope.key(), fail_closed, exc)
+            LOGGER.warning(
+                "rehydrate_failure scope_hash=%s fail_closed=%s error_type=%s",
+                _scope_hash(scope),
+                fail_closed,
+                type(exc).__name__,
+            )
             if fail_closed:
                 raise
             return RehydrationResult(
@@ -859,13 +869,13 @@ class PIIMiddleware:
             self._release_endpoint("rehydrate")
 
     def end_session(self, scope: ScopeContext, *, fail_closed: bool = True) -> bool:
-        LOGGER.info("session_end_start scope=%s", scope.key())
+        LOGGER.debug("session_end_start scope_hash=%s", _scope_hash(scope))
         key = scope.key()
         with self._lock:
             entry = self._vaults.pop(key, None)
         vault = entry.vault if entry is not None else None
         if vault is None:
-            LOGGER.info("session_end_success scope=%s status=session_not_found", scope.key())
+            LOGGER.debug("session_end_success scope_hash=%s status=session_not_found", _scope_hash(scope))
             return False
         if self._writer is not None:
             queued = self._writer.enqueue_delete(scope)
@@ -880,7 +890,7 @@ class PIIMiddleware:
             if not queued and fail_closed:
                 raise PersistenceUnavailableError("Persistence queue full while ending session")
         vault.destroy()
-        LOGGER.info("session_end_success scope=%s status=vault_destroyed", scope.key())
+        LOGGER.debug("session_end_success scope_hash=%s status=vault_destroyed", _scope_hash(scope))
         return True
 
     def _acquire_endpoint(self, endpoint: str) -> None:
@@ -1002,7 +1012,7 @@ class PIIMiddleware:
             elapsed_seconds = time.perf_counter() - started
             self._metrics.record("persistence_load", elapsed_seconds)
             self._metrics.record(f"persistence_{operation}", elapsed_seconds)
-            LOGGER.info(
+            LOGGER.debug(
                 "persistence_load_timing op=%s scope_hash=%s duration_ms=%.2f queue_depth=%s",
                 operation,
                 _scope_hash(scope),

@@ -135,4 +135,5 @@ And provide:
 - Build-time internet is expected for dependency/model download.
 - Runtime internet is not required (and should be blocked in strict mode).
 - Keep API key auth enabled in production (`PII_REDACTOR_REQUIRE_API_KEY=true`).
+- Prefer `LOG_FORMAT=json` for Grafana/Loki deployments, and leave `PII_REDACTOR_ACCESS_LOGS=false` unless access logs are needed for a short DEBUG investigation.
 - Avoid logging request bodies in production to prevent raw PII exposure.

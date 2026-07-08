@@ -18,6 +18,8 @@ def _settings(**overrides: object) -> Settings:
         fail_closed_default=True,
         allow_raw_replacements=False,
         log_level="INFO",
+        log_format="text",
+        access_logs=False,
         use_presidio=False,
         presidio_minimal_recognizers=True,
         require_presidio=False,

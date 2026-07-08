@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
 
@@ -8,6 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from .allowlist_cache import AllowlistSelector, LocalAllowlistCache, extract_allowlist_terms
 from .config import get_settings
+from .logging_config import configure_logging
 from .middleware import PIIMiddleware, RedactorSaturatedError
 from .persistence import PersistenceConfigError, build_vault_store
 from .schemas import (
@@ -23,9 +25,16 @@ from .schemas import (
 )
 
 settings = get_settings()
+LOG_LEVEL = configure_logging(
+    log_level=settings.log_level,
+    log_format=settings.log_format,
+    access_logs=settings.access_logs,
+)
+LOGGER = logging.getLogger(__name__)
 try:
     vault_store, persistence_mode = build_vault_store(settings)
 except PersistenceConfigError as exc:
+    LOGGER.error("redactor_startup_failure reason=invalid_persistence_config error_type=%s", type(exc).__name__)
     raise RuntimeError(f"Invalid persistence configuration: {exc}") from exc
 
 allowlist_cache = (
@@ -45,25 +54,37 @@ middleware = PIIMiddleware(
 detector_status = middleware.detector_status
 if settings.require_gliner:
     if not settings.use_gliner:
+        LOGGER.error("redactor_startup_failure reason=invalid_required_gliner_config")
         raise RuntimeError(
             "Invalid detector configuration: PII_REDACTOR_REQUIRE_GLINER=true "
             "requires PII_REDACTOR_USE_GLINER=true"
         )
     if not bool(detector_status.get("gliner_enabled")):
         detail = str(detector_status.get("gliner_load_error") or "unknown error")
+        LOGGER.error("redactor_startup_failure reason=required_gliner_unavailable")
         raise RuntimeError(f"GLiNER required but unavailable at startup: {detail}")
 if settings.require_presidio:
     if not settings.use_presidio:
+        LOGGER.error("redactor_startup_failure reason=invalid_required_presidio_config")
         raise RuntimeError(
             "Invalid detector configuration: PII_REDACTOR_REQUIRE_PRESIDIO=true "
             "requires PII_REDACTOR_USE_PRESIDIO=true"
         )
     if not bool(detector_status.get("presidio_enabled")):
         detail = str(detector_status.get("presidio_load_error") or "unknown error")
+        LOGGER.error("redactor_startup_failure reason=required_presidio_unavailable")
         raise RuntimeError(f"Presidio required but unavailable at startup: {detail}")
 
 app = FastAPI(title="PII Redactor", version="0.1.0")
-
+LOGGER.info(
+    "redactor_startup_success persistence_mode=%s log_level=%s log_format=%s access_logs=%s presidio_enabled=%s gliner_enabled=%s",
+    persistence_mode,
+    logging.getLevelName(LOG_LEVEL),
+    settings.log_format,
+    settings.access_logs,
+    bool(detector_status.get("presidio_enabled")),
+    bool(detector_status.get("gliner_enabled")),
+)
 
 
 def _validate_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -107,11 +128,13 @@ def redact(request: RedactRequest) -> RedactResponse:
             fail_closed=fail_closed,
         )
     except RedactorSaturatedError as exc:
+        LOGGER.warning("redact_request_saturated")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Redaction service saturated",
         ) from exc
     except Exception as exc:
+        LOGGER.exception("redact_request_failure error_type=%s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Redaction service unavailable",
@@ -139,11 +162,13 @@ def rehydrate(request: RehydrateRequest) -> RehydrateResponse:
             fail_closed=fail_closed,
         )
     except RedactorSaturatedError as exc:
+        LOGGER.warning("rehydrate_request_saturated")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Rehydrate service saturated",
         ) from exc
     except Exception as exc:
+        LOGGER.exception("rehydrate_request_failure error_type=%s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Rehydrate service unavailable",
@@ -160,6 +185,7 @@ def end_session(request: SessionEndRequest) -> SessionEndResponse:
     try:
         ended = middleware.end_session(scope=request.to_scope(), fail_closed=settings.fail_closed_default)
     except Exception as exc:
+        LOGGER.exception("session_end_request_failure error_type=%s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Session cleanup unavailable",
@@ -189,6 +215,7 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
         try:
             terms.extend(extract_allowlist_terms(request.payload, selectors))
         except ValueError as exc:
+            LOGGER.warning("allowlist_refresh_rejected reason=invalid_selector_payload")
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     try:
@@ -199,7 +226,16 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
             source_version=request.source_version,
         )
     except ValueError as exc:
+        LOGGER.warning("allowlist_refresh_rejected reason=invalid_terms")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    LOGGER.debug(
+        "allowlist_refresh_success client_id=%s assistant_id=%s term_count=%s changed=%s",
+        request.client_id,
+        request.assistant_id,
+        result.term_count,
+        result.changed,
+    )
 
     return AllowlistRefreshResponse(
         status="updated" if result.changed else "unchanged",

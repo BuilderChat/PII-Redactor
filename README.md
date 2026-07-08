@@ -156,6 +156,16 @@ Required scope fields on every request:
 - Persistence write failures are retried with cooldown-based recovery before the service stays blocked.
 - Transient persistence save failures report `degraded_nonblocking`; existing in-memory scopes can continue, but missing-vault loads, queue-full saves, and auth/schema/config failures still fail closed.
 
+### Logging
+
+- `PII_REDACTOR_LOG_LEVEL` controls application logging and falls back to shared `LOG_LEVEL` when unset.
+- `PII_REDACTOR_LOG_FORMAT` accepts `json` or `text` and falls back to shared `LOG_FORMAT`.
+- `PII_REDACTOR_LOG_JSON=true` or `LOG_JSON=true` enables JSON logs when no explicit format is set.
+- `PII_REDACTOR_ACCESS_LOGS=false` by default suppresses Uvicorn 2xx request access logs.
+- INFO logs are reserved for startup and operational state changes; successful request-level timing and 2xx request details are DEBUG.
+- WARNING/ERROR logs remain visible at INFO level and cover saturation, persistence pressure, blocked requests, rejected allowlist refreshes, and unexpected endpoint failures.
+- Production observability should use `LOG_FORMAT=json` so Grafana/Loki can extract `level`, `logger`, `environment`, `app_role`, `request_id`, `client_id`, `assistant_id`, and `message`.
+
 ### Memory + Persistence Behavior
 
 - In-memory scope cache is bounded:

@@ -22,6 +22,8 @@ class Settings:
     fail_closed_default: bool
     allow_raw_replacements: bool
     log_level: str
+    log_format: str
+    access_logs: bool
     use_presidio: bool
     presidio_minimal_recognizers: bool
     require_presidio: bool
@@ -110,7 +112,9 @@ def get_settings() -> Settings:
         require_api_key=_env_bool("PII_REDACTOR_REQUIRE_API_KEY", True),
         fail_closed_default=_env_bool("PII_REDACTOR_FAIL_CLOSED_DEFAULT", True),
         allow_raw_replacements=_env_bool("PII_REDACTOR_ALLOW_RAW_REPLACEMENTS", False),
-        log_level=os.getenv("PII_REDACTOR_LOG_LEVEL", "INFO"),
+        log_level=os.getenv("PII_REDACTOR_LOG_LEVEL") or os.getenv("LOG_LEVEL") or "INFO",
+        log_format=(os.getenv("PII_REDACTOR_LOG_FORMAT") or os.getenv("LOG_FORMAT") or "text").strip().lower(),
+        access_logs=_env_bool("PII_REDACTOR_ACCESS_LOGS", False),
         use_presidio=_env_bool("PII_REDACTOR_USE_PRESIDIO", False),
         presidio_minimal_recognizers=_env_bool("PII_REDACTOR_PRESIDIO_MINIMAL_RECOGNIZERS", True),
         require_presidio=_env_bool("PII_REDACTOR_REQUIRE_PRESIDIO", False),

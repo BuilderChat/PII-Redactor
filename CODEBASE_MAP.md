@@ -8,7 +8,8 @@
 - `src/pii_vault.py`: Scoped token/value store and snapshot serialization.
 - `src/persistence.py`: Vault persistence selector and stores (`none`, `internal`, `external`).
 - `src/allowlist_cache.py`: Local per-assistant allowlist cache, selector-based extraction, atomic snapshot writes.
-- `src/config.py`: Environment-backed settings loader, including persistence and endpoint concurrency controls.
+- `src/config.py`: Environment-backed settings loader, including persistence, logging, and endpoint concurrency controls.
+- `src/logging_config.py`: Shared Redactor logging configuration for JSON/text output, Grafana/Loki fields, and Uvicorn access-log suppression.
 - `src/schemas.py`: API request/response contracts, including the `/health` observability payload.
 - `src/types.py`: Shared typed scope model.
 
@@ -33,6 +34,7 @@
 - `tests/test_allowlist_cache.py`: Allowlist selector extraction, cache rewrite behavior, middleware merge behavior.
 - `tests/test_engine_airgap.py`: Air-gap detector initialization guarantees (GLiNER local-only by default).
 - `tests/test_server_auth.py`: API key guard behavior.
+- `tests/test_logging_config.py`: Redactor logging field, context, and Uvicorn access-log behavior.
 - `tests/test_persistence_selector.py`: Persistence mode/build validation.
 - `tests/test_schemas_contract.py`: Request schema validation and behavior.
 - `tests/test_middleware_*.py`: Scope isolation and runtime policies.
