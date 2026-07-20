@@ -39,6 +39,15 @@ PROMPTED_NAME_EXPLANATION_TAIL_RE = re.compile(
     r"^\s*(?:[,.;:!?-]\s*)?(?:(?:just\s+)?like\b|same\s+as\b|as\s+in\b|as\s+(?:the|a|an)\b)",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_LAST_NAME_PROSE_TAIL_RE = re.compile(
+    r"^\s*(?:[,.;:!?-]\s*)?(?:could|can|please|just|i|and)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+PROMPTED_LAST_NAME_GRATITUDE_RE = re.compile(
+    rf"^\s*(?P<prefix>thank\s+you|thanks|thx|ty|thankyou|thank)\b"
+    rf"(?:(?:\s*[,.;:!?-]\s*)|\s+)(?P<name>{NAME_WORD_PATTERN})\b",
+    re.IGNORECASE | re.UNICODE,
+)
 COORDINATED_NAME_RE = re.compile(
     r"\b([A-Z][A-Za-z'\-]*)\s+(?:and|&)\s+([A-Za-z][A-Za-z'\-]*)\s+([A-Z][A-Za-z'\-]*)\b"
 )
@@ -1213,6 +1222,17 @@ class PIIEngine:
                 prefer_latest=prefer_latest,
             )
 
+        if request_type == "last":
+            gratitude_match = PROMPTED_LAST_NAME_GRATITUDE_RE.match(working_text)
+            if gratitude_match:
+                value = gratitude_match.group("name")
+                normalized = value.lower()
+                if (
+                    not self._is_blocked_name_token(normalized)
+                    and self._normalize_text_phrase(value) not in non_name_terms
+                ):
+                    return [_span(gratitude_match.start("name"), gratitude_match.end("name"), "ln", value)]
+
         if request_type in {"first", "full"}:
             alias_match = PROMPTED_NAME_ALIAS_RE.match(working_text)
             if alias_match:
@@ -1587,10 +1607,7 @@ class PIIEngine:
                     pass
                 elif EMAIL_RE.match(stripped_tail) or PHONE_RE.match(stripped_tail):
                     pass
-                elif (
-                    value[0].isupper()
-                    and lstripped_tail.lower().startswith(("could ", "can ", "please ", "just ", "i ", "and "))
-                ):
+                elif value[0].isupper() and PROMPTED_LAST_NAME_PROSE_TAIL_RE.match(tail_text):
                     pass
                 else:
                     return []
@@ -2462,6 +2479,8 @@ class PIIEngine:
                 return False
 
         if lower_words[0] in NAME_PREFIX_EXCLUSIONS:
+            return False
+        if len(words) >= 2 and lower_words[0] in {"thank", "thanks", "thx", "ty", "thankyou"}:
             return False
         if len(words) >= 2 and lower_words[0] in {"yes", "no"}:
             return False

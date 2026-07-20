@@ -748,6 +748,41 @@ def test_last_name_prompt_with_trailing_request_still_redacts_last_name() -> Non
     )
 
 
+def test_last_name_prompt_with_punctuated_prose_tail_redacts_last_name_only() -> None:
+    prompt = "Just to round things out—what's your last name?"
+    assert _redact("Nguyen. And I can text any time", previous_assistant_message=prompt) == (
+        "<ln_1>. And I can text any time"
+    )
+    assert _redact("Nguyen! I can text any time", previous_assistant_message=prompt) == (
+        "<ln_1>! I can text any time"
+    )
+
+
+def test_last_name_prompt_with_gratitude_prefix_redacts_last_name_only() -> None:
+    prompt = "Just for our records—what's your last name?"
+    cases = {
+        "Thank you. Huffaker": "Thank you. <ln_1>",
+        "Thank you Huffaker": "Thank you <ln_1>",
+        "Thank you, Huffaker": "Thank you, <ln_1>",
+        "Thanks Huffaker": "Thanks <ln_1>",
+        "Thanks. Huffaker": "Thanks. <ln_1>",
+        "Thx Huffaker": "Thx <ln_1>",
+        "Ty Huffaker": "Ty <ln_1>",
+        "Thank Huffaker": "Thank <ln_1>",
+        "Thankyou Huffaker": "Thankyou <ln_1>",
+    }
+    for text, expected in cases.items():
+        assert _redact(text, previous_assistant_message=prompt) == expected
+
+
+def test_last_name_prompt_with_prose_starter_only_is_not_redacted() -> None:
+    prompt = "Just to round things out—what's your last name?"
+    assert _redact("And I can text any time", previous_assistant_message=prompt) == "And I can text any time"
+    assert _redact("Can you text me any time", previous_assistant_message=prompt) == "Can you text me any time"
+    assert _redact("Thank you for your help", previous_assistant_message=prompt) == "Thank you for your help"
+    assert _redact("Thanks", previous_assistant_message=prompt) == "Thanks"
+
+
 def test_location_topic_cue_with_allowlisted_city_is_not_name() -> None:
     assert _redact("Location Regina", non_name_allowlist=["Regina"]) == "Location Regina"
     assert _redact("Regina Location", non_name_allowlist=["Regina"]) == "Regina Location"
