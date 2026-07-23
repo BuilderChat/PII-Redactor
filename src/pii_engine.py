@@ -98,6 +98,11 @@ REALTOR_PAIR_INTRO_RE = re.compile(
     r"(?P<cue>realtor(?:s)?|agent(?:s)?|broker(?:s)?)\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_NAME_PROFESSIONAL_TAIL_RE = re.compile(
+    r"^\s*,\s*(?:realtor|agent|broker)\b"
+    r"(?:\s*,?\s*(?:[A-Z]\.?\s*)?\d[\d.\- ]*)?\s*[.!?]?\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_NAME_ALIAS_RE = re.compile(
     rf"^\s*(?P<first>{NAME_WORD_PATTERN})\s*"
     rf"(?:\((?P<paren>{NAME_WORD_PATTERN})\)|[-–—]\s*(?:(?:short\s+for\s+|nickname\s+)(?P<dash_phrase>{NAME_WORD_PATTERN})|(?P<dash>{NAME_WORD_PATTERN})))",
@@ -1540,6 +1545,9 @@ class PIIEngine:
                     and (EMAIL_RE.match(tail_after_full_stripped) or PHONE_RE.match(tail_after_full_stripped))
                 )
                 has_contact_anywhere = bool(EMAIL_RE.search(tail_after_full) or PHONE_RE.search(tail_after_full))
+                has_professional_title_tail = request_type in {"first", "full"} and bool(
+                    PROMPTED_NAME_PROFESSIONAL_TAIL_RE.match(tail_after_full)
+                )
                 allow_lower_second = request_type == "full" and (
                     has_contact_anywhere
                     or (len(words) == 2 and not tail_after_full_stripped and not first_word_in_non_name_terms)
@@ -1561,6 +1569,7 @@ class PIIEngine:
                         or tail_after_full_stripped[0] in {",", ".", "!", "?", ";", ":"}
                         or has_contact_tail
                         or has_contact_anywhere
+                        or has_professional_title_tail
                     )
                 ):
                     return [

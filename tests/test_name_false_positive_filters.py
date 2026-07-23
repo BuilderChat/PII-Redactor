@@ -846,6 +846,25 @@ def test_last_name_prompt_with_known_first_inside_longer_reply_redacts_ln() -> N
     assert redacted == "I'm a realtor <fn_1> <ln_1>"
 
 
+def test_first_name_prompt_accepts_full_name_with_realtor_license_tail() -> None:
+    prompt = "Great! I have your contact info. Now, what's your first name?"
+    assert _redact("Rita Eissmann, Realtor S.195235", previous_assistant_message=prompt) == (
+        "<fn_1> <ln_1>, Realtor S.195235"
+    )
+
+
+def test_prompted_realtor_tail_respects_non_name_allowlist() -> None:
+    prompt = "Great! I have your contact info. Now, what's your first name?"
+    assert (
+        _redact(
+            "Rushing Waters, Realtor S.195235",
+            previous_assistant_message=prompt,
+            non_name_allowlist=["Rushing Waters"],
+        )
+        == "Rushing Waters, Realtor S.195235"
+    )
+
+
 def test_phone_then_two_token_name_redacts_both_name_tokens() -> None:
     assert _redact("4156909283 Stanley chia") == "<ph_1> <fn_1> <ln_1>"
 
