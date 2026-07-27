@@ -18,7 +18,8 @@ EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECAS
 PHONE_RE = re.compile(
     r"(?<!\w)(?:\+?\d{1,3}[\s./\-+]*)?(?:\(?\d{3}\)?[\s./\-+]*)\d{3}[\s./\-+]*\d{4}(?!\w)"
 )
-NAME_WORD_PATTERN = r"[^\W\d_]+(?:['\-][^\W\d_]+)*"
+NAME_JOINER_CHARS = "'’‘`-"
+NAME_WORD_PATTERN = rf"[^\W\d_]+(?:[{re.escape(NAME_JOINER_CHARS)}](?![sS]\b)[^\W\d_]+)*"
 NAME_INTRO_RE = re.compile(
     r"\b(?P<cue>my\s+n(?:ame|ae|me)s?(?:\s+is)?|i\s+am|i'm|this\s+is)\s+"
     r"(?P<candidate>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,4})",
@@ -43,6 +44,7 @@ PROMPTED_LAST_NAME_PROSE_TAIL_RE = re.compile(
     r"^\s*(?:[,.;:!?-]\s*)?(?:could|can|please|just|i|and)\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_NAME_POSSESSIVE_SUFFIX_RE = re.compile(r"^\s*['’‘`]s\b", re.IGNORECASE | re.UNICODE)
 PROMPTED_LAST_NAME_GRATITUDE_RE = re.compile(
     rf"^\s*(?P<prefix>thank\s+you|thanks|thx|ty|thankyou|thank)\b"
     rf"(?:(?:\s*[,.;:!?-]\s*)|\s+)(?P<name>{NAME_WORD_PATTERN})\b",
@@ -1605,6 +1607,7 @@ class PIIEngine:
             return []
 
         tail_text = working_text[match.end(1) :]
+        tail_is_possessive_suffix = bool(PROMPTED_NAME_POSSESSIVE_SUFFIX_RE.match(tail_text))
         if re.match(r"\s+\d", tail_text):
             return []
 
@@ -1618,11 +1621,13 @@ class PIIEngine:
                     pass
                 elif value[0].isupper() and PROMPTED_LAST_NAME_PROSE_TAIL_RE.match(tail_text):
                     pass
+                elif tail_is_possessive_suffix:
+                    pass
                 else:
                     return []
 
         next_char = tail_text[:1]
-        if next_char and next_char not in {",", ".", "!", "?", ";", ":", " ", "\t"}:
+        if next_char and next_char not in {",", ".", "!", "?", ";", ":", " ", "\t"} and not tail_is_possessive_suffix:
             return []
 
         if not value[0].isalpha():

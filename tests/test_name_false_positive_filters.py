@@ -775,6 +775,23 @@ def test_last_name_prompt_with_gratitude_prefix_redacts_last_name_only() -> None
         assert _redact(text, previous_assistant_message=prompt) == expected
 
 
+def test_last_name_prompt_accepts_unicode_apostrophe_last_name() -> None:
+    prompt = "Just for our records—what's your last name?"
+    assert _redact("D’Angelo", previous_assistant_message=prompt) == "<ln_1>"
+
+
+def test_last_name_prompt_keeps_possessive_suffix_outside_name_token() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    redacted = engine.redact(
+        "D’Angelo’s",
+        vault,
+        previous_assistant_message="Just for our records—what's your last name?",
+    ).redacted_text
+    assert redacted == "<ln_1>’s"
+    assert vault.items()["<ln_1>"] == "D’Angelo"
+
+
 def test_last_name_prompt_with_prose_starter_only_is_not_redacted() -> None:
     prompt = "Just to round things out—what's your last name?"
     assert _redact("And I can text any time", previous_assistant_message=prompt) == "And I can text any time"
