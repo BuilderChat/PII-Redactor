@@ -462,6 +462,43 @@ def test_name_correction_single_word_last_name_restores_ln_token() -> None:
     assert last_only == "<ln_1>"
 
 
+def test_name_correction_with_negative_contact_reply_updates_last_name_token() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    _ = engine.redact("Victoria", vault, previous_assistant_message="What's your first name?").redacted_text
+    initial = engine.redact(
+        "Weavver",
+        vault,
+        previous_assistant_message="Just for our records—what's your last name?",
+    ).redacted_text
+    corrected = engine.redact(
+        "Weaver and no",
+        vault,
+        previous_assistant_message="Do you have an email we can use just in case?",
+    ).redacted_text
+    assert initial == "<ln_1>"
+    assert corrected == "<ln_1> and no"
+    assert vault.items()["<ln_1>"] == "Weaver"
+
+
+def test_name_correction_negative_contact_tail_requires_near_match() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    _ = engine.redact("Victoria", vault, previous_assistant_message="What's your first name?").redacted_text
+    _ = engine.redact(
+        "Weavver",
+        vault,
+        previous_assistant_message="Just for our records—what's your last name?",
+    ).redacted_text
+    redacted = engine.redact(
+        "Pricing and no",
+        vault,
+        previous_assistant_message="Do you have an email we can use just in case?",
+    ).redacted_text
+    assert redacted == "Pricing and no"
+    assert vault.items()["<ln_1>"] == "Weavver"
+
+
 def test_name_and_best_contact_prompt_redacts_name_plus_phone() -> None:
     prompt = "What's your name and best contact info? I can have our team reach out."
     assert _redact("Geetha 4699610539", previous_assistant_message=prompt) == "<fn_1> <ph_1>"

@@ -45,6 +45,11 @@ PROMPTED_LAST_NAME_PROSE_TAIL_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 PROMPTED_NAME_POSSESSIVE_SUFFIX_RE = re.compile(r"^\s*['’‘`]s\b", re.IGNORECASE | re.UNICODE)
+NAME_CORRECTION_NEGATIVE_CONTACT_TAIL_RE = re.compile(
+    r"^\s+(?:and\s+)?(?:no|nope|nah|none|not\s+(?:now|yet|right\s+now))"
+    r"(?:\s+(?:email|e-mail|thanks?|thank\s+you))?\s*[.!?]*\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_LAST_NAME_GRATITUDE_RE = re.compile(
     rf"^\s*(?P<prefix>thank\s+you|thanks|thx|ty|thankyou|thank)\b"
     rf"(?:(?:\s*[,.;:!?-]\s*)|\s+)(?P<name>{NAME_WORD_PATTERN})\b",
@@ -1950,6 +1955,34 @@ class PIIEngine:
                 and self._is_similar_name_token(self._normalize_text_phrase(candidate), self._normalize_text_phrase(known_last))
             ):
                 return [Span(one_word_match.start(1), one_word_match.end(1), "ln", candidate, prefer_latest=True)]
+
+        negative_tail_match = re.match(rf"^\s*({NAME_WORD_PATTERN})\b(?P<tail>.+)$", text, flags=re.UNICODE)
+        if negative_tail_match and NAME_CORRECTION_NEGATIVE_CONTACT_TAIL_RE.match(negative_tail_match.group("tail")):
+            candidate = negative_tail_match.group(1)
+            candidate_normalized = candidate.lower()
+            if (
+                candidate_normalized not in NON_NAME_SINGLE_WORDS
+                and candidate_normalized not in NAME_PREFIX_EXCLUSIONS
+                and candidate_normalized not in NON_NAME_MULTIWORD_COMPONENTS
+                and candidate_normalized not in NON_NAME_PHRASE_HINTS
+                and candidate_normalized not in GEO_DIRECTION_WORDS
+                and candidate_normalized not in GEO_REGION_ABBREVIATIONS
+                and not self._contains_phrase([candidate_normalized], GEO_REGION_PHRASES)
+                and self._normalize_text_phrase(candidate) not in non_name_terms
+                and self._is_similar_name_token(
+                    self._normalize_text_phrase(candidate),
+                    self._normalize_text_phrase(known_last),
+                )
+            ):
+                return [
+                    Span(
+                        negative_tail_match.start(1),
+                        negative_tail_match.end(1),
+                        "ln",
+                        candidate,
+                        prefer_latest=True,
+                    )
+                ]
 
         match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b", text, flags=re.UNICODE)
         if not match:
