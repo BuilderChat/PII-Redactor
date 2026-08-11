@@ -793,6 +793,22 @@ def test_last_name_prompt_with_punctuated_prose_tail_redacts_last_name_only() ->
     assert _redact("Nguyen! I can text any time", previous_assistant_message=prompt) == (
         "<ln_1>! I can text any time"
     )
+    assert _redact("Burns. We are also interested in move in ready homes", previous_assistant_message=prompt) == (
+        "<ln_1>. We are also interested in move in ready homes"
+    )
+
+
+def test_last_name_prompt_sentence_starters_without_name_are_not_redacted() -> None:
+    prompt = "Just to round things out—what's your last name?"
+    assert _redact("We are also interested in move in ready homes", previous_assistant_message=prompt) == (
+        "We are also interested in move in ready homes"
+    )
+    assert _redact("Also interested in move in ready homes", previous_assistant_message=prompt) == (
+        "Also interested in move in ready homes"
+    )
+    assert _redact("My question is about move in ready homes", previous_assistant_message=prompt) == (
+        "My question is about move in ready homes"
+    )
 
 
 def test_last_name_prompt_with_gratitude_prefix_redacts_last_name_only() -> None:

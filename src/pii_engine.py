@@ -44,6 +44,10 @@ PROMPTED_LAST_NAME_PROSE_TAIL_RE = re.compile(
     r"^\s*(?:[,.;:!?-]\s*)?(?:could|can|please|just|i|and)\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_LAST_NAME_SENTENCE_TAIL_RE = re.compile(
+    r"^\s*[.!?]\s+(?:we|i|my|our|also)\b",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_NAME_POSSESSIVE_SUFFIX_RE = re.compile(r"^\s*['’‘`]s\b", re.IGNORECASE | re.UNICODE)
 NAME_CORRECTION_NEGATIVE_CONTACT_TAIL_RE = re.compile(
     r"^\s+(?:and\s+)?(?:no|nope|nah|none|not\s+(?:now|yet|right\s+now))"
@@ -1625,6 +1629,8 @@ class PIIEngine:
                 elif EMAIL_RE.match(stripped_tail) or PHONE_RE.match(stripped_tail):
                     pass
                 elif value[0].isupper() and PROMPTED_LAST_NAME_PROSE_TAIL_RE.match(tail_text):
+                    pass
+                elif value[0].isupper() and PROMPTED_LAST_NAME_SENTENCE_TAIL_RE.match(tail_text):
                     pass
                 elif tail_is_possessive_suffix:
                     pass
