@@ -204,6 +204,22 @@ def test_contact_info_prompt_treats_name_plus_phone_as_name_reply() -> None:
     assert _redact("Reather Cooper 912-425-2102", previous_assistant_message=prompt) == "<fn_1> <ln_1> <ph_1>"
 
 
+def test_leading_prose_before_phone_is_not_redacted_as_name() -> None:
+    text = (
+        "Also need to knowif the back has a view and if the primary bedroom is on first floor. "
+        "Cel no 702 890 7142"
+    )
+
+    assert (
+        _redact(text)
+        == "Also need to knowif the back has a view and if the primary bedroom is on first floor. Cel no <ph_1>"
+    )
+
+
+def test_compact_leading_name_with_contact_label_still_redacts() -> None:
+    assert _redact("John Smith phone 702 890 7142") == "<fn_1> <ln_1> phone <ph_1>"
+
+
 def test_full_name_prompt_with_lowercase_last_name_and_phone_redacts_both_name_tokens() -> None:
     prompt = "What can I use to reach you? Please share your first and last name and phone."
     assert _redact("Kadyzia young 4782020388", previous_assistant_message=prompt) == "<fn_1> <ln_1> <ph_1>"

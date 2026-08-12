@@ -414,6 +414,9 @@ NON_NAME_SINGLE_WORDS = {
     "hey",
     "thanks",
     "thank",
+    "also",
+    "need",
+    "needs",
     "and",
     "ok",
     "okay",
@@ -485,6 +488,24 @@ NON_NAME_SINGLE_WORDS = {
     "doctor",
     "nurse",
     "would",
+}
+LEADING_NAME_CONTACT_BRIDGE_WORDS = {
+    "at",
+    "call",
+    "cel",
+    "cell",
+    "contact",
+    "e",
+    "email",
+    "mail",
+    "mobile",
+    "no",
+    "number",
+    "ph",
+    "phone",
+    "tel",
+    "telephone",
+    "text",
 }
 NON_NAME_MULTIWORD_COMPONENTS = {
     "agent",
@@ -1728,13 +1749,32 @@ class PIIEngine:
             return []
 
         tail_after_second = text[match.end(2) :]
-        has_contact_tail = bool(EMAIL_RE.search(tail_after_second) or PHONE_RE.search(tail_after_second))
-        if not has_contact_tail:
+        if not self._leading_name_contact_tail_is_adjacent(tail_after_second):
             return []
         return [
             Span(match.start(1), match.end(1), "fn", first),
             Span(match.start(2), match.end(2), "ln", second),
         ]
+
+    @staticmethod
+    def _leading_name_contact_tail_is_adjacent(tail: str) -> bool:
+        email_match = EMAIL_RE.search(tail)
+        phone_match = PHONE_RE.search(tail)
+        contact_match = None
+        if email_match and phone_match:
+            contact_match = email_match if email_match.start() <= phone_match.start() else phone_match
+        else:
+            contact_match = email_match or phone_match
+        if not contact_match:
+            return False
+
+        bridge = tail[: contact_match.start()]
+        if not bridge.strip():
+            return True
+        words = re.findall(NAME_WORD_PATTERN, bridge, flags=re.UNICODE)
+        if not words:
+            return True
+        return all(word.lower() in LEADING_NAME_CONTACT_BRIDGE_WORDS for word in words)
 
     def _detect_contact_then_name_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
         contact_match = EMAIL_RE.search(text) or PHONE_RE.search(text)
