@@ -25,6 +25,10 @@ NAME_INTRO_RE = re.compile(
     r"(?P<candidate>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,4})",
     re.IGNORECASE,
 )
+OPENING_GREETING_CONTEXT_RE = re.compile(
+    r"<opening_greeting_context\b[^>]*>.*?</opening_greeting_context>",
+    re.IGNORECASE | re.DOTALL,
+)
 CASUAL_IM_NAME_INTRO_RE = re.compile(
     rf"(?P<prefix>\b(?:(?:hi|hello|hey)\b[\s,!.]*){{1,4}})"
     rf"(?P<cue>i\s*m|im)\s+(?P<name>{NAME_WORD_PATTERN})\b"
@@ -1100,7 +1104,21 @@ class PIIEngine:
                     )
                 )
 
-        return spans
+        return self._filter_internal_context_spans(text, spans)
+
+    @staticmethod
+    def _filter_internal_context_spans(text: str, spans: list[Span]) -> list[Span]:
+        if not spans:
+            return spans
+        suppressed_ranges = [(match.start(), match.end()) for match in OPENING_GREETING_CONTEXT_RE.finditer(text or "")]
+        if not suppressed_ranges:
+            return spans
+        filtered: list[Span] = []
+        for span in spans:
+            if any(span.start >= start and span.end <= end for start, end in suppressed_ranges):
+                continue
+            filtered.append(span)
+        return filtered
 
     def _detect_repeat_value_spans(
         self,
