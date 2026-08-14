@@ -44,6 +44,14 @@ PROMPTED_NAME_EXPLANATION_TAIL_RE = re.compile(
     r"^\s*(?:[,.;:!?-]\s*)?(?:(?:just\s+)?like\b|same\s+as\b|as\s+in\b|as\s+(?:the|a|an)\b)",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_FIRST_NAME_CONTACT_PREF_TAIL_RE = re.compile(
+    r"^\s*[.!?]\s+"
+    r"(?:(?:you|u)\s+can\s+)?"
+    r"(?:(?:please\s+)?(?:text|txt|phone|message|msg|call|email|e-mail)\s+me\b|"
+    r"(?:reach|contact)\s+me\b|"
+    r"(?:send|shoot)\s+me\s+(?:a\s+)?(?:text|txt|message|msg|email|e-mail)\b)",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_LAST_NAME_PROSE_TAIL_RE = re.compile(
     r"^\s*(?:[,.;:!?-]\s*)?(?:could|can|please|just|i|and)\b",
     re.IGNORECASE | re.UNICODE,
@@ -1387,6 +1395,9 @@ class PIIEngine:
                 return [_span(match.start(1), match.end(1), "fn", value)]
 
             if PROMPTED_NAME_EXPLANATION_TAIL_RE.match(tail_text_for_first):
+                return [_span(match.start(1), match.end(1), "fn", value)]
+
+            if value[0].isupper() and PROMPTED_FIRST_NAME_CONTACT_PREF_TAIL_RE.match(tail_text_for_first):
                 return [_span(match.start(1), match.end(1), "fn", value)]
 
         if request_type == "full":

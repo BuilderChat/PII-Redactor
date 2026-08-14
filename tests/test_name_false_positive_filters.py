@@ -692,6 +692,43 @@ def test_first_name_prompt_with_explanation_tail_redacts_name_only() -> None:
     assert _redact("Jon, just like the finish", previous_assistant_message=prompt) == "<fn_1>, just like the finish"
 
 
+def test_first_name_prompt_with_contact_preference_sentence_redacts_name_only() -> None:
+    prompt = "Got it—I have your email. What's your first name?"
+    cases = {
+        "Shiraz. You can text me too": "<fn_1>. You can text me too",
+        "Shiraz. phone me too": "<fn_1>. phone me too",
+        "Shiraz. message me too after 5": "<fn_1>. message me too after 5",
+        "Shiraz. call me tomorrow": "<fn_1>. call me tomorrow",
+        "Shiraz. email me when you can": "<fn_1>. email me when you can",
+        "Shiraz. send me a message too": "<fn_1>. send me a message too",
+    }
+    for text, expected in cases.items():
+        assert _redact(text, previous_assistant_message=prompt) == expected
+
+
+def test_first_name_prompt_contact_preference_sentence_preserves_later_pii_redaction() -> None:
+    prompt = "Got it—I have your email. What's your first name?"
+    assert _redact("Shiraz. email me at shiraz@example.com too", previous_assistant_message=prompt) == (
+        "<fn_1>. email me at <em_1> too"
+    )
+    assert _redact("Shiraz. call me at 555-123-4567 too", previous_assistant_message=prompt) == (
+        "<fn_1>. call me at <ph_1> too"
+    )
+
+
+def test_first_name_prompt_contact_preference_without_leading_name_stays_unredacted() -> None:
+    prompt = "Got it—I have your email. What's your first name?"
+    cases = [
+        "You can text me too",
+        "phone me too",
+        "message me too after 5",
+        "call me tomorrow",
+        "email me when you can",
+    ]
+    for text in cases:
+        assert _redact(text, previous_assistant_message=prompt) == text
+
+
 def test_first_name_prompt_explanation_tail_does_not_redact_blocked_starter() -> None:
     prompt = "Great! What's your first name?"
     assert _redact("Like the Jasmine", previous_assistant_message=prompt) == "Like the Jasmine"
