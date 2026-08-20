@@ -18,6 +18,36 @@ EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECAS
 PHONE_RE = re.compile(
     r"(?<!\w)(?:\+?\d{1,3}[\s./\-+]*)?(?:\(?\d{3}\)?[\s./\-+]*)\d{3}[\s./\-+]*\d{4}(?!\w)"
 )
+PROMPTED_UNUSUAL_PHONE_RE = re.compile(
+    r"(?<!\d)(?P<area>[2-9]\d{2})[\s./\-]+(?P<middle>\d{4})[\s./\-]+(?P<tail>\d{3})(?!\d)"
+)
+COMMON_CONSUMER_EMAIL_DOMAINS = {
+    "aol.com",
+    "gmail.com",
+    "googlemail.com",
+    "hotmail.com",
+    "icloud.com",
+    "live.com",
+    "mac.com",
+    "me.com",
+    "msn.com",
+    "outlook.com",
+    "proton.me",
+    "protonmail.com",
+    "yahoo.ca",
+    "yahoo.co.uk",
+    "yahoo.com",
+    "ymail.com",
+}
+SPACED_EMAIL_PREFIX_EXCLUSIONS = {
+    "at",
+    "email",
+    "is",
+    "mail",
+    "me",
+    "my",
+    "the",
+}
 NAME_JOINER_CHARS = "'’‘`-"
 NAME_WORD_PATTERN = rf"[^\W\d_]+(?:[{re.escape(NAME_JOINER_CHARS)}](?![sS]\b)[^\W\d_]+)*"
 NAME_INTRO_RE = re.compile(
@@ -1094,6 +1124,7 @@ class PIIEngine:
         spans.extend(self._detect_email_phone_spans_presidio(text))
         spans.extend(self._detect_email_phone_spans_regex(text))
         spans.extend(self._detect_prompted_spaced_email_spans(text, previous_assistant_message))
+        spans.extend(self._detect_prompted_unusual_phone_spans(text, previous_assistant_message))
 
         if not suppress_name_detection:
             spans.extend(self._detect_leading_name_with_contact_spans(text, non_name_terms=runtime_non_name_terms))
@@ -2320,21 +2351,48 @@ class PIIEngine:
         spans: list[Span] = []
         for match in EMAIL_RE.finditer(text):
             prefix = text[: match.start()]
-            fragment_match = re.search(r"(?P<fragment>[A-Za-z0-9._%+-]{1,8})\s+$", prefix)
+            fragment_match = re.search(r"(?P<fragment>[A-Za-z0-9._%+-]{1,48})\s+$", prefix)
             if not fragment_match:
                 continue
 
             fragment = fragment_match.group("fragment")
-            if not any(char.isdigit() for char in fragment):
+            local_part = match.group(0).split("@", 1)[0]
+            domain = match.group(0).split("@", 1)[1].lower()
+            fragment_normalized = fragment.strip("._%+-").lower()
+            has_digit_fragment = any(char.isdigit() for char in fragment)
+            has_common_short_local = (
+                len(local_part) <= 3
+                and domain in COMMON_CONSUMER_EMAIL_DOMAINS
+                and len(fragment_normalized) >= 4
+                and any(char.isalpha() for char in fragment_normalized)
+                and fragment_normalized not in SPACED_EMAIL_PREFIX_EXCLUSIONS
+            )
+            if not has_digit_fragment and not has_common_short_local:
                 continue
 
-            local_part = match.group(0).split("@", 1)[0]
-            if len(local_part) >= 6:
+            if has_digit_fragment and len(local_part) >= 6:
                 continue
 
             value = f"{fragment}{match.group(0)}"
             spans.append(Span(fragment_match.start("fragment"), match.end(), "em", value))
 
+        return spans
+
+    def _detect_prompted_unusual_phone_spans(
+        self,
+        text: str,
+        previous_assistant_message: str | None,
+    ) -> list[Span]:
+        if not self._assistant_requests_phone_contact(previous_assistant_message):
+            return []
+
+        spans: list[Span] = []
+        for match in PROMPTED_UNUSUAL_PHONE_RE.finditer(text):
+            digits = re.sub(r"\D", "", match.group(0))
+            if len(digits) != 10:
+                continue
+            normalized = f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+            spans.append(Span(match.start(), match.end(), "ph", normalized))
         return spans
 
     def _detect_email_phone_spans_presidio(self, text: str) -> list[Span]:
@@ -3048,6 +3106,24 @@ class PIIEngine:
                 or "best email" in normalized
                 or "your email" in normalized
                 or "email address" in normalized
+                or "email or phone" in normalized
+            )
+        )
+
+    @staticmethod
+    def _assistant_requests_phone_contact(previous_assistant_message: str | None) -> bool:
+        if not previous_assistant_message:
+            return False
+        normalized = re.sub(r"\s+", " ", previous_assistant_message.strip().lower())
+        return (
+            "phone" in normalized
+            and (
+                "phone number" in normalized
+                or "phone" in normalized
+                or "number" in normalized
+                or "backup" in normalized
+                or "reach you" in normalized
+                or "contact" in normalized
                 or "email or phone" in normalized
             )
         )

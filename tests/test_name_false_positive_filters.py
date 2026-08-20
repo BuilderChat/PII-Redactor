@@ -181,6 +181,19 @@ def test_phone_with_slash_separators_is_detected() -> None:
     assert _redact("phone also 1/510/459/9942") == "phone also <ph_1>"
 
 
+def test_phone_prompt_detects_unusual_three_four_three_grouping() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    prompt = "Perfect! Do you have a phone number I can add?"
+    result = engine.redact("306 5260 260", vault, previous_assistant_message=prompt)
+    assert result.redacted_text == "<ph_1>"
+    assert vault.items()["<ph_1>"] == "306-526-0260"
+
+
+def test_unusual_three_four_three_grouping_requires_phone_prompt() -> None:
+    assert _redact("306 5260 260") == "306 5260 260"
+
+
 def test_repeat_detected_name_is_redacted_again_in_same_vault_thread() -> None:
     engine = PIIEngine(use_presidio=False, use_gliner=False)
     vault = PIIVault()
@@ -645,6 +658,24 @@ def test_email_prompt_joins_short_digit_fragment_before_email() -> None:
     result = engine.redact("Brenda J5 19@yahoo.com.", vault, previous_assistant_message=prompt)
     assert result.redacted_text == "Brenda <em_1>."
     assert vault.items()["<em_1>"] == "J519@yahoo.com"
+
+
+def test_email_prompt_joins_name_fragment_before_short_common_domain_email() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    prompt = "To book a home, I'll need your email or phone number. Which would you prefer?"
+    result = engine.redact("my email is salmafirdous 52@yahoo.com", vault, previous_assistant_message=prompt)
+    assert result.redacted_text == "my email is <em_1>"
+    assert vault.items()["<em_1>"] == "salmafirdous52@yahoo.com"
+
+
+def test_email_prompt_respects_confirmed_short_common_domain_email_without_fragment() -> None:
+    engine = PIIEngine(use_presidio=False, use_gliner=False)
+    vault = PIIVault()
+    prompt = "What's the best email to reach you at?"
+    result = engine.redact("my email is ab@yahoo.com", vault, previous_assistant_message=prompt)
+    assert result.redacted_text == "my email is <em_1>"
+    assert vault.items()["<em_1>"] == "ab@yahoo.com"
 
 
 def test_spaced_email_join_requires_email_prompt_and_digit_fragment() -> None:
