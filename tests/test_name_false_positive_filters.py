@@ -120,6 +120,29 @@ def test_prompted_first_and_last_name_request_does_not_redact_city_state_reply()
     assert _redact(text, previous_assistant_message=prompt, non_name_allowlist=["Windsor"]) == text
 
 
+def test_first_name_prompt_redacts_two_person_full_names_with_suffix() -> None:
+    prompt = "Got it! I have your phone number. What's your first name?"
+    assert _redact("Sebero Marin jr & Erika Canela", previous_assistant_message=prompt) == (
+        "<fn_1> <ln_1> jr & <fn_2> <ln_2>"
+    )
+    assert _redact("Sebero Marin Sr. + Erika Canela", previous_assistant_message=prompt) == (
+        "<fn_1> <ln_1> Sr. + <fn_2> <ln_2>"
+    )
+
+
+def test_first_name_prompt_redacts_two_person_full_names_with_and_separator() -> None:
+    prompt = "What's your first name?"
+    assert _redact("Sebero Marin and Erika Canela", previous_assistant_message=prompt) == (
+        "<fn_1> <ln_1> and <fn_2> <ln_2>"
+    )
+
+
+def test_first_name_prompt_two_person_shape_requires_clean_tail() -> None:
+    prompt = "What's your first name?"
+    text = "Sebero Marin and Erika Canela will attend"
+    assert _redact(text, previous_assistant_message=prompt) == text
+
+
 def test_prompted_first_name_does_not_redact_plan_keyword() -> None:
     prompt = "Can I grab your first name?"
     assert _redact("Plan 1", previous_assistant_message=prompt) == "Plan 1"

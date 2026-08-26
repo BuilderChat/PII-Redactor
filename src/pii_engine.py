@@ -161,6 +161,13 @@ PROMPTED_NAME_ALIAS_RE = re.compile(
     rf"(?:\((?P<paren>{NAME_WORD_PATTERN})\)|[-–—]\s*(?:(?:short\s+for\s+|nickname\s+)(?P<dash_phrase>{NAME_WORD_PATTERN})|(?P<dash>{NAME_WORD_PATTERN})))",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_FIRST_NAME_TWO_PERSON_RE = re.compile(
+    rf"^\s*(?P<f1>{NAME_WORD_PATTERN})\s+(?P<l1>{NAME_WORD_PATTERN})"
+    r"(?:\s+(?P<suffix>jr|sr)\.?)?"
+    r"\s*(?P<sep>&|\+|and)\s+"
+    rf"(?P<f2>{NAME_WORD_PATTERN})\s+(?P<l2>{NAME_WORD_PATTERN})\b",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_INITIAL_FULL_NAME_RE = re.compile(
     rf"^\s*(?P<first>{NAME_WORD_PATTERN})\s+(?P<middle>[^\W\d_])\.?\s+(?P<last>{NAME_WORD_PATTERN})\b",
     re.UNICODE,
@@ -1355,6 +1362,50 @@ class PIIEngine:
                                         alias,
                                     ),
                                 ]
+
+            if request_type == "first":
+                two_person_match = PROMPTED_FIRST_NAME_TWO_PERSON_RE.match(working_text)
+                if two_person_match:
+                    name_parts = [
+                        ("f1", "fn"),
+                        ("l1", "ln"),
+                        ("f2", "fn"),
+                        ("l2", "ln"),
+                    ]
+                    values = {group: two_person_match.group(group) for group, _entity in name_parts}
+                    normalized_values = {
+                        group: self._normalize_text_phrase(value)
+                        for group, value in values.items()
+                    }
+                    trailing = working_text[two_person_match.end("l2") :].strip()
+                    lower_values = list(normalized_values.values())
+                    full_names = [
+                        f"{normalized_values['f1']} {normalized_values['l1']}",
+                        f"{normalized_values['f2']} {normalized_values['l2']}",
+                    ]
+                    if (
+                        (not trailing or re.fullmatch(r"[.,!?;:)\]}\"']*", trailing))
+                        and not any(self._is_blocked_name_token(token) for token in lower_values)
+                        and not any(token in non_name_terms for token in lower_values)
+                        and not any(full_name in non_name_terms for full_name in full_names)
+                        and not self._looks_like_location_non_name_phrase(
+                            [normalized_values["f1"], normalized_values["l1"]],
+                            non_name_terms,
+                        )
+                        and not self._looks_like_location_non_name_phrase(
+                            [normalized_values["f2"], normalized_values["l2"]],
+                            non_name_terms,
+                        )
+                    ):
+                        return [
+                            _span(
+                                two_person_match.start(group),
+                                two_person_match.end(group),
+                                entity,
+                                values[group],
+                            )
+                            for group, entity in name_parts
+                        ]
 
             initial_full_match = PROMPTED_INITIAL_FULL_NAME_RE.match(working_text)
             if initial_full_match:
