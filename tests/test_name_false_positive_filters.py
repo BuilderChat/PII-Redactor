@@ -999,6 +999,33 @@ def test_and_is_not_captured_as_last_name_then_repeated() -> None:
     assert follow_up == "Probably at lease 3 bedrooms and a finished basement suite"
 
 
+def test_property_feature_questions_are_not_redacted_as_names() -> None:
+    prompt = "Any of these catching your eye?"
+    cases = (
+        "BASEMENT FINISHED?",
+        "FINISHED BASEMENT?",
+        "GARAGE INCLUDED?",
+        "KITCHEN ISLAND?",
+        "MASTER DOWN?",
+        "PRIMARY BEDROOM?",
+        "UNFINISHED BASEMENT?",
+        "LOFT INCLUDED?",
+    )
+    for text in cases:
+        assert _redact(text, previous_assistant_message=prompt) == text
+
+
+def test_explicit_identity_and_contact_flows_still_redact() -> None:
+    assert _redact("Hi this is John Smith with a basement question") == (
+        "Hi this is <fn_1> <ln_1> with a basement question"
+    )
+    assert _redact("Hi this is John Smith, 555-123-4567") == (
+        "Hi this is <fn_1> <ln_1>, <ph_1>"
+    )
+    assert _redact("John Smith john@example.com") == "<fn_1> <ln_1> <em_1>"
+    assert _redact("John Smith 555-123-4567") == "<fn_1> <ln_1> <ph_1>"
+
+
 def test_va_homebuying_context_phrase_is_not_name() -> None:
     assert _redact("also i am VA") == "also i am VA"
 
