@@ -36,6 +36,18 @@ def test_still_redacts_explicit_name_intro() -> None:
     assert _redact(text) == "My name is <fn_1> <ln_1>"
 
 
+def test_misspelled_namie_intro_redacts_full_name_without_gliner() -> None:
+    text = "hi my namie is jon matte. i am hoping to build a home in the wilmington area"
+    assert _redact(text) == (
+        "hi my namie is <fn_1> <ln_1>. i am hoping to build a home in the wilmington area"
+    )
+
+
+def test_namie_outside_self_identification_does_not_trigger_name_redaction() -> None:
+    text = "The word namie is misspelled."
+    assert _redact(text) == text
+
+
 def test_punctuation_light_my_names_intro_redacts_first_name() -> None:
     assert _redact("My names ken") == "My names <fn_1>"
 
@@ -1120,6 +1132,24 @@ def test_prompted_realtor_tail_respects_non_name_allowlist() -> None:
 
 def test_phone_then_two_token_name_redacts_both_name_tokens() -> None:
     assert _redact("4156909283 Stanley chia") == "<ph_1> <fn_1> <ln_1>"
+
+
+def test_phone_ellipsis_then_full_name_after_last_name_prompt_redacts_both_names() -> None:
+    prompt = "Just for our records—what's your last name?"
+    assert _redact("4156909283...Raymond Bryant", previous_assistant_message=prompt) == (
+        "<ph_1>...<fn_1> <ln_1>"
+    )
+    assert _redact("415-690-9283... Raymond Bryant", previous_assistant_message=prompt) == (
+        "<ph_1>... <fn_1> <ln_1>"
+    )
+
+
+def test_phone_ellipsis_does_not_create_unprompted_or_lowercase_name_evidence() -> None:
+    assert _redact("4156909283...Raymond Bryant") == "<ph_1>...Raymond Bryant"
+    prompt = "Just for our records—what's your last name?"
+    assert _redact("4156909283...finished basement", previous_assistant_message=prompt) == (
+        "<ph_1>...finished basement"
+    )
 
 
 def test_coordinated_name_phrase_is_still_redacted() -> None:

@@ -51,7 +51,7 @@ SPACED_EMAIL_PREFIX_EXCLUSIONS = {
 NAME_JOINER_CHARS = "'’‘`-"
 NAME_WORD_PATTERN = rf"[^\W\d_]+(?:[{re.escape(NAME_JOINER_CHARS)}](?![sS]\b)[^\W\d_]+)*"
 NAME_INTRO_RE = re.compile(
-    r"\b(?P<cue>my\s+n(?:ame|ae|me)s?(?:\s+is)?|i\s+am|i'm|this\s+is)\s+"
+    r"\b(?P<cue>my\s+n(?:ame|amie|ae|me)s?(?:\s+is)?|i\s+am|i'm|this\s+is)\s+"
     r"(?P<candidate>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,4})",
     re.IGNORECASE,
 )
@@ -258,6 +258,7 @@ NAME_NOISE_WORDS = {
 }
 NAME_CONTEXT_CUES = (
     "my name is",
+    "my namie is",
     "my names",
     "my nae is",
     "my nme is",
@@ -1168,7 +1169,13 @@ class PIIEngine:
 
         if not suppress_name_detection:
             spans.extend(self._detect_leading_name_with_contact_spans(text, non_name_terms=runtime_non_name_terms))
-            spans.extend(self._detect_contact_then_name_spans(text, non_name_terms=runtime_non_name_terms))
+            spans.extend(
+                self._detect_contact_then_name_spans(
+                    text,
+                    non_name_terms=runtime_non_name_terms,
+                    request_type=assistant_name_request_type,
+                )
+            )
             spans.extend(self._detect_contact_with_parenthetical_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_signature_tail_name_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(self._detect_closing_signature_name_spans(text, non_name_terms=runtime_non_name_terms))
@@ -1904,13 +1911,26 @@ class PIIEngine:
             return True
         return all(word.lower() in LEADING_NAME_CONTACT_BRIDGE_WORDS for word in words)
 
-    def _detect_contact_then_name_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
+    def _detect_contact_then_name_spans(
+        self,
+        text: str,
+        non_name_terms: set[str],
+        request_type: str | None = None,
+    ) -> list[Span]:
         contact_match = EMAIL_RE.search(text) or PHONE_RE.search(text)
         if not contact_match:
             return []
 
-        tail = text[contact_match.end() :]
-        tail = re.sub(r"^[\s,;:\-@]+", "", tail)
+        raw_tail = text[contact_match.end() :]
+        ellipsis_bridge = re.match(r"^\s*(?:\.{2,}|…)\s*", raw_tail)
+        if ellipsis_bridge:
+            if request_type != "last":
+                return []
+            bridge_end = ellipsis_bridge.end()
+        else:
+            separator_bridge = re.match(r"^[\s,;:\-@]+", raw_tail)
+            bridge_end = separator_bridge.end() if separator_bridge else 0
+        tail = raw_tail[bridge_end:]
         if not tail:
             return []
 
@@ -1920,6 +1940,8 @@ class PIIEngine:
 
         first = match.group(1)
         second = match.group(2)
+        if ellipsis_bridge and (not first[:1].isupper() or not second[:1].isupper()):
+            return []
         first_normalized = first.lower()
         second_normalized = second.lower()
         if first_normalized in NON_NAME_SINGLE_WORDS or second_normalized in NON_NAME_SINGLE_WORDS:
@@ -1945,7 +1967,7 @@ class PIIEngine:
         if trailing_after_name and not re.fullmatch(r"[.,!?;:)\]}\"']*", trailing_after_name):
             return []
 
-        base_offset = contact_match.end() + (len(text[contact_match.end() :]) - len(text[contact_match.end() :].lstrip(" ,;:-@")))
+        base_offset = contact_match.end() + bridge_end
         start_first = base_offset + match.start(1)
         end_first = base_offset + match.end(1)
         start_second = base_offset + match.start(2)
