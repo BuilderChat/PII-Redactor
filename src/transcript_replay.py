@@ -18,6 +18,7 @@ ReplayRole = Literal["assistant", "agent", "user"]
 class TranscriptTurn:
     role: ReplayRole
     content: str
+    pending_name_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ def replay_transcript(
         raise ValueError(f"Transcript exceeds the {max_turns}-turn replay limit")
 
     total_characters = 0
-    normalized_turns: list[tuple[str, str]] = []
+    normalized_turns: list[tuple[str, str, tuple[str, ...]]] = []
     for turn in turns:
         role = str(turn.role).strip().lower()
         if role not in {"assistant", "agent", "user"}:
@@ -65,14 +66,14 @@ def replay_transcript(
         total_characters += len(turn.content)
         if total_characters > max_characters:
             raise ValueError(f"Transcript exceeds the {max_characters}-character replay limit")
-        normalized_turns.append((role, turn.content))
+        normalized_turns.append((role, turn.content, tuple(turn.pending_name_fields)))
 
     vault = PIIVault()
     allowlist = tuple(non_name_allowlist or ())
     previous_assistant_message: str | None = None
     replayed_user_turns: list[ReplayedUserTurn] = []
 
-    for turn_index, (role, content) in enumerate(normalized_turns):
+    for turn_index, (role, content, pending_name_fields) in enumerate(normalized_turns):
         if role in {"assistant", "agent"}:
             previous_assistant_message = content
             continue
@@ -82,6 +83,7 @@ def replay_transcript(
             vault,
             previous_assistant_message=previous_assistant_message,
             non_name_allowlist=allowlist,
+            pending_name_fields=list(pending_name_fields),
         )
         replayed_user_turns.append(
             ReplayedUserTurn(

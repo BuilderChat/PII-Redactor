@@ -79,6 +79,7 @@ curl -X POST http://localhost:8000/redact \
     "assistant_id": "a1",
     "message": "My name is Jinbad Profut and my email is jin@test.com",
     "previous_assistant_message": "What is your first name?",
+    "pending_name_fields": ["first_name"],
     "non_name_allowlist": ["Windsor", "Shadow Hills", "Old Redwood Village"],
     "failure_mode": "closed"
   }'
@@ -140,6 +141,7 @@ Required scope fields on every request:
 - `/redact`
   - `new_user=true` advances token profile (`*_1 -> *_2`, etc.) for the same thread scope.
   - `previous_assistant_message` improves prompted-name handling.
+  - `pending_name_fields` optionally carries `first_name` / `last_name` field identifiers when an earlier contact-collection step remains unresolved. It never carries contact values and only enables narrow single-word name handling after normal non-name guards pass.
   - `failure_mode` supports `closed` or `open` (default inherits server setting).
   - `include_replacements=true` only returns raw replacements when `PII_REDACTOR_ALLOW_RAW_REPLACEMENTS=true`.
 - `/rehydrate`
@@ -151,6 +153,7 @@ Required scope fields on every request:
   - Supports direct `terms` or selector-based extraction from arbitrary JSON payloads.
 - `/audit/transcript`
   - Accepts ordered `assistant`, `agent`, and `user` turns plus `client_id` and `assistant_id`.
+  - User turns may include the same optional `pending_name_fields` identifiers so replay uses the original live-turn collection context.
   - Uses a fresh vault, the canonical detector, and the same cached/request allowlists as live redaction.
   - Returns only user-turn indexes, tokenized text, and structured replacement evidence.
   - Raw evidence is response-only for trusted backend provenance matching; do not log or persist it unencrypted.
@@ -320,6 +323,7 @@ Multi-instance mode (recommended for scale):
 ## Name Tuning Hooks
 
 - `previous_assistant_message` (optional): improves one-word name handling by only treating single-word replies as names when prior assistant text asked for a name.
+- `pending_name_fields` (optional): preserves unresolved first/last-name intent across one-at-a-time contact prompts; only canonical field identifiers are accepted.
 - `non_name_allowlist` (optional): per-request city/community/domain terms that should not be treated as person names.
 - Environment defaults:
   - `PII_REDACTOR_NON_NAME_TERMS` (CSV)

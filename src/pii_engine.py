@@ -474,6 +474,7 @@ NON_NAME_SINGLE_WORDS = {
     "okay",
     "sure",
     "please",
+    "pending",
     "either",
     "good",
     "list",
@@ -995,12 +996,14 @@ class PIIEngine:
         vault: PIIVault,
         previous_assistant_message: str | None = None,
         non_name_allowlist: list[str] | tuple[str, ...] | None = None,
+        pending_name_fields: list[str] | tuple[str, ...] | None = None,
     ) -> RedactionResult:
         spans = self._collect_spans(
             text,
             vault=vault,
             previous_assistant_message=previous_assistant_message,
             non_name_allowlist=non_name_allowlist,
+            pending_name_fields=pending_name_fields,
         )
         if not spans:
             return RedactionResult(
@@ -1140,12 +1143,22 @@ class PIIEngine:
         vault: PIIVault | None = None,
         previous_assistant_message: str | None = None,
         non_name_allowlist: list[str] | tuple[str, ...] | None = None,
+        pending_name_fields: list[str] | tuple[str, ...] | None = None,
     ) -> list[Span]:
         spans: list[Span] = []
         runtime_non_name_terms = set(self._configured_non_name_terms)
         runtime_non_name_terms.update(self._normalize_non_name_terms(non_name_allowlist))
         assistant_name_request_type = self._assistant_name_request_type(previous_assistant_message)
-        assistant_requests_name = self._assistant_has_explicit_name_request(previous_assistant_message)
+        if assistant_name_request_type is None:
+            assistant_name_request_type = self._pending_name_request_type(
+                text,
+                pending_name_fields=pending_name_fields,
+                non_name_terms=runtime_non_name_terms,
+            )
+        assistant_requests_name = bool(
+            assistant_name_request_type
+            or self._assistant_has_explicit_name_request(previous_assistant_message)
+        )
         suppress_name_detection = self._should_suppress_name_detection(
             text=text,
             previous_assistant_message=previous_assistant_message,
@@ -3210,6 +3223,42 @@ class PIIEngine:
         if any(cue in normalized for cue in ASSISTANT_NAME_REQUEST_CUES):
             return "first"
         return None
+
+    def _pending_name_request_type(
+        self,
+        text: str,
+        *,
+        pending_name_fields: list[str] | tuple[str, ...] | None,
+        non_name_terms: set[str],
+    ) -> str | None:
+        pending = {
+            str(field or "").strip().lower()
+            for field in (pending_name_fields or ())
+        }
+        if not pending.intersection({"first_name", "last_name"}):
+            return None
+        match = re.fullmatch(
+            rf"\s*({NAME_WORD_PATTERN})\s*[.!?]?\s*",
+            str(text or ""),
+            flags=re.UNICODE,
+        )
+        if not match:
+            return None
+        value = match.group(1)
+        normalized = value.lower()
+        if not value[:1].isupper():
+            return None
+        if self._is_blocked_name_token(normalized):
+            return None
+        if normalized in PROMPTED_NAME_REPLY_NON_NAME_STARTERS:
+            return None
+        if any(normalized in phrase.split() for phrase in PROMPTED_NAME_REFERENTIAL_REPLIES):
+            return None
+        if self._normalize_text_phrase(value) in non_name_terms:
+            return None
+        if "first_name" in pending:
+            return "first"
+        return "last"
 
     @staticmethod
     def _assistant_has_explicit_name_request(previous_assistant_message: str | None) -> bool:

@@ -45,6 +45,10 @@ class RedactRequest(ScopeRequest):
     message: str = Field(min_length=1)
     new_user: bool = False
     previous_assistant_message: str | None = None
+    pending_name_fields: list[Literal["first_name", "last_name"]] = Field(
+        default_factory=list,
+        max_length=2,
+    )
     non_name_allowlist: list[str] | None = None
     failure_mode: Literal["closed", "open"] | None = None
     include_replacements: bool = False
@@ -110,6 +114,10 @@ class AllowlistRefreshResponse(BaseModel):
 class AuditTranscriptTurn(BaseModel):
     role: Literal["assistant", "agent", "user"]
     content: str = Field(min_length=1, max_length=AUDIT_MAX_CHARACTERS_HARD_LIMIT)
+    pending_name_fields: list[Literal["first_name", "last_name"]] = Field(
+        default_factory=list,
+        max_length=2,
+    )
 
 
 class AuditTranscriptRequest(BaseModel):

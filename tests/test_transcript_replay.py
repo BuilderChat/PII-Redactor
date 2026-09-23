@@ -46,6 +46,23 @@ def test_replay_uses_the_actual_preceding_assistant_turn_and_one_vault() -> None
     assert result.token_to_value == {"<fn_1>": "Avery", "<ln_1>": "D'Angelo"}
 
 
+def test_replay_uses_persisted_pending_name_context() -> None:
+    result = replay_transcript(
+        [
+            TranscriptTurn(role="assistant", content="What's your phone number?"),
+            TranscriptTurn(
+                role="user",
+                content="Dhana",
+                pending_name_fields=("first_name",),
+            ),
+        ],
+        engine=PIIEngine(use_presidio=False, use_gliner=False),
+    )
+
+    assert result.user_turns[-1].redacted_text == "<fn_1>"
+    assert result.token_to_value == {"<fn_1>": "Dhana"}
+
+
 def test_replay_scope_is_isolated_from_other_replays() -> None:
     first = _replay([("assistant", "What's your first name?"), ("user", "Avery")])
     second = _replay([("assistant", "What would you like to know?"), ("user", "Avery")])

@@ -20,7 +20,9 @@ class _FakeEngine:
         vault,
         previous_assistant_message: str | None = None,
         non_name_allowlist: list[str] | None = None,
+        pending_name_fields: list[str] | None = None,
     ) -> RedactionResult:
+        del previous_assistant_message, pending_name_fields
         self.last_non_name_allowlist = list(non_name_allowlist or ())
         return RedactionResult(redacted_text=text, replacements={}, active_profile=vault.current_profile)
 

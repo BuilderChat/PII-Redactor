@@ -123,8 +123,15 @@ class _SlowEngine:
         self.release = release
         self.delay = delay
 
-    def redact(self, text, vault, previous_assistant_message=None, non_name_allowlist=None):
-        del vault, previous_assistant_message, non_name_allowlist
+    def redact(
+        self,
+        text,
+        vault,
+        previous_assistant_message=None,
+        non_name_allowlist=None,
+        pending_name_fields=None,
+    ):
+        del vault, previous_assistant_message, non_name_allowlist, pending_name_fields
         self.started.set()
         if self.release is not None:
             self.release.wait(timeout=1.0)

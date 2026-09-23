@@ -50,7 +50,7 @@ Confirmed from `src/server.py`:
 
 - `POST /redact`
   - Requires API key unless disabled by configuration.
-  - Accepts scoped raw user message.
+  - Accepts scoped raw user message plus optional canonical pending-name field identifiers for narrow one-word replies during active contact collection.
   - Calls `PIIMiddleware.process_inbound`.
   - Returns redacted text, active user index, and optionally raw replacements only when both request and server config allow it.
   - Returns `503` when saturated or unexpectedly unavailable.
@@ -76,7 +76,7 @@ Confirmed from `src/server.py`:
 
 - `POST /audit/transcript`
   - Requires API key unless disabled by configuration.
-  - Sequentially replays bounded assistant/user turns through the canonical engine in a fresh, non-persisted vault.
+  - Sequentially replays bounded assistant/user turns, including optional per-user-turn pending-name field identifiers, through the canonical engine in a fresh, non-persisted vault.
   - Merges request and cached per-client/per-assistant non-name allowlists.
   - Returns tokenized user turns and per-turn replacement evidence for trusted provenance checks.
   - Returns `422` for invalid/over-limit input, `503` when saturated, and `504` on timeout.

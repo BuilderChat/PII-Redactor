@@ -153,6 +153,7 @@ def redact(request: RedactRequest) -> RedactResponse:
             new_user=request.new_user,
             previous_assistant_message=request.previous_assistant_message,
             non_name_allowlist=request.non_name_allowlist,
+            pending_name_fields=request.pending_name_fields,
             fail_closed=fail_closed,
         )
     except RedactorSaturatedError as exc:
@@ -192,7 +193,11 @@ def audit_transcript(request: AuditTranscriptRequest) -> AuditTranscriptResponse
             client_id=request.client_id,
             assistant_id=request.assistant_id,
             turns=tuple(
-                TranscriptTurn(role=turn.role, content=turn.content)
+                TranscriptTurn(
+                    role=turn.role,
+                    content=turn.content,
+                    pending_name_fields=tuple(turn.pending_name_fields),
+                )
                 for turn in request.turns
             ),
             non_name_allowlist=request.non_name_allowlist,

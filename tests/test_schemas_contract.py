@@ -52,6 +52,28 @@ def test_failure_mode_resolution_defaults_to_config_value() -> None:
     assert redact_closed.fail_closed(default_closed=False) is True
 
 
+def test_redact_pending_name_fields_are_bounded_and_canonical() -> None:
+    request = RedactRequest(
+        thread_id="thread_pending_name",
+        session_id="s1",
+        visitor_id="v1",
+        client_id="c1",
+        message="Dhana",
+        pending_name_fields=["first_name"],
+    )
+    assert request.pending_name_fields == ["first_name"]
+
+    with pytest.raises(ValidationError):
+        RedactRequest(
+            thread_id="thread_pending_name_invalid",
+            session_id="s1",
+            visitor_id="v1",
+            client_id="c1",
+            message="Dhana",
+            pending_name_fields=["phone"],
+        )
+
+
 def test_rehydrate_failure_mode_resolution() -> None:
     request = RehydrateRequest(
         thread_id="thread_2",

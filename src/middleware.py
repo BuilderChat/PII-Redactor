@@ -701,6 +701,7 @@ class PIIMiddleware:
         new_user: bool = False,
         previous_assistant_message: str | None = None,
         non_name_allowlist: list[str] | None = None,
+        pending_name_fields: list[str] | None = None,
         fail_closed: bool = True,
     ) -> RedactionResult:
         self._acquire_endpoint("redact")
@@ -734,6 +735,7 @@ class PIIMiddleware:
                 vault,
                 previous_assistant_message=previous_assistant_message,
                 non_name_allowlist=combined_allowlist,
+                pending_name_fields=pending_name_fields,
             )
             detector_seconds = time.perf_counter() - detector_started
             self._metrics.record("redact_detector", detector_seconds)

@@ -6,6 +6,7 @@ def _redact(
     text: str,
     previous_assistant_message: str | None = None,
     non_name_allowlist: list[str] | None = None,
+    pending_name_fields: list[str] | None = None,
 ) -> str:
     engine = PIIEngine(use_presidio=False, use_gliner=False)
     vault = PIIVault()
@@ -14,7 +15,34 @@ def _redact(
         vault,
         previous_assistant_message=previous_assistant_message,
         non_name_allowlist=non_name_allowlist,
+        pending_name_fields=pending_name_fields,
     ).redacted_text
+
+
+def test_pending_first_name_redacts_narrow_reply_during_phone_prompt() -> None:
+    assert _redact(
+        "Dhana",
+        previous_assistant_message="What's your phone number?",
+        pending_name_fields=["first_name"],
+    ) == "<fn_1>"
+
+
+def test_pending_first_name_does_not_redact_non_name_or_housing_replies() -> None:
+    for text in (
+        "Phone",
+        "Can",
+        "Are",
+        "Same",
+        "Pending",
+        "BASEMENT FINISHED?",
+        "Can I get pricing and floorplans?",
+        "Are there lots available?",
+    ):
+        assert _redact(
+            text,
+            previous_assistant_message="What's your phone number?",
+            pending_name_fields=["first_name"],
+        ) == text
 
 
 def test_does_not_redact_known_false_positive_phrases() -> None:
