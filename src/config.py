@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 
 ENTITY_KEYS = ("fn", "mn1", "mn2", "ln", "em", "ph")
 NAME_ENTITY_KEYS = ("fn", "mn1", "mn2", "ln")
+AUDIT_MAX_TURNS_HARD_LIMIT = 200
+AUDIT_MAX_CHARACTERS_HARD_LIMIT = 100_000
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DOTENV_LOADED = False
 
@@ -56,6 +58,11 @@ class Settings:
     allowlist_cache_enabled: bool
     allowlist_cache_dir: str
     allowlist_cache_max_terms: int
+    audit_max_turns: int = 200
+    audit_max_characters: int = 100_000
+    audit_timeout_seconds: float = 2.0
+    audit_max_concurrency: int = 2
+    audit_acquire_timeout_seconds: float = 0.1
 
 
 def _env_int(name: str, default: int) -> int:
@@ -157,4 +164,24 @@ def get_settings() -> Settings:
         allowlist_cache_dir=os.getenv("PII_REDACTOR_ALLOWLIST_CACHE_DIR", ".cache/non_name_allowlists").strip()
         or ".cache/non_name_allowlists",
         allowlist_cache_max_terms=max(100, _env_int("PII_REDACTOR_ALLOWLIST_CACHE_MAX_TERMS", 50000)),
+        audit_max_turns=min(
+            AUDIT_MAX_TURNS_HARD_LIMIT,
+            max(1, _env_int("PII_REDACTOR_AUDIT_MAX_TURNS", AUDIT_MAX_TURNS_HARD_LIMIT)),
+        ),
+        audit_max_characters=min(
+            AUDIT_MAX_CHARACTERS_HARD_LIMIT,
+            max(
+                1,
+                _env_int(
+                    "PII_REDACTOR_AUDIT_MAX_CHARACTERS",
+                    AUDIT_MAX_CHARACTERS_HARD_LIMIT,
+                ),
+            ),
+        ),
+        audit_timeout_seconds=max(0.01, _env_float("PII_REDACTOR_AUDIT_TIMEOUT_SECONDS", 2.0)),
+        audit_max_concurrency=max(1, _env_int("PII_REDACTOR_AUDIT_MAX_CONCURRENCY", 2)),
+        audit_acquire_timeout_seconds=max(
+            0.0,
+            _env_float("PII_REDACTOR_AUDIT_ACQUIRE_TIMEOUT_SECONDS", 0.1),
+        ),
     )

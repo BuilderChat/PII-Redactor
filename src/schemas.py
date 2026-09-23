@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from pydantic import model_validator
 
+from .config import AUDIT_MAX_CHARACTERS_HARD_LIMIT, AUDIT_MAX_TURNS_HARD_LIMIT, ENTITY_KEYS
 from .types import ScopeContext
 
 
@@ -106,6 +107,46 @@ class AllowlistRefreshResponse(BaseModel):
     cache_file: str
 
 
+class AuditTranscriptTurn(BaseModel):
+    role: Literal["assistant", "agent", "user"]
+    content: str = Field(min_length=1, max_length=AUDIT_MAX_CHARACTERS_HARD_LIMIT)
+
+
+class AuditTranscriptRequest(BaseModel):
+    client_id: str = Field(min_length=1, max_length=128)
+    assistant_id: str | None = Field(default=None, max_length=128)
+    turns: list[AuditTranscriptTurn] = Field(min_length=1, max_length=AUDIT_MAX_TURNS_HARD_LIMIT)
+    non_name_allowlist: list[str] | None = Field(default=None, max_length=5_000)
+
+    @model_validator(mode="after")
+    def default_assistant(self) -> "AuditTranscriptRequest":
+        self.assistant_id = _resolve_assistant_id(self.client_id, self.assistant_id)
+        return self
+
+
+class AuditReplacementEvidence(BaseModel):
+    token: str
+    entity: Literal["fn", "mn1", "mn2", "ln", "em", "ph"]
+    value: str
+
+
+class AuditUserTurnResponse(BaseModel):
+    turn_index: int
+    redacted: str
+    evidence: list[AuditReplacementEvidence]
+
+
+class AuditTranscriptResponse(BaseModel):
+    user_turns: list[AuditUserTurnResponse]
+
+
+def replacement_entity(token: str) -> str:
+    entity = token.removeprefix("<").split("_", 1)[0]
+    if entity not in ENTITY_KEYS:
+        raise ValueError(f"Unsupported replacement token: {token}")
+    return entity
+
+
 class RedactResponse(BaseModel):
     redacted: str
     active_user_index: int
@@ -131,6 +172,10 @@ class HealthResponse(BaseModel):
     rehydrate_max_concurrency: int = 0
     redact_saturated_count: int = 0
     rehydrate_saturated_count: int = 0
+    audit_active: int = 0
+    audit_max_concurrency: int = 0
+    audit_saturated_count: int = 0
+    audit_timeout_count: int = 0
     presidio_enabled: bool
     gliner_enabled: bool
     require_gliner: bool

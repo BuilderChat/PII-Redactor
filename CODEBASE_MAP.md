@@ -74,6 +74,13 @@ Confirmed from `src/server.py`:
   - Refreshes a per-client/per-assistant non-name allowlist cache.
   - Returns cache metadata including changed status, content hash, source version, and cache file.
 
+- `POST /audit/transcript`
+  - Requires API key unless disabled by configuration.
+  - Sequentially replays bounded assistant/user turns through the canonical engine in a fresh, non-persisted vault.
+  - Merges request and cached per-client/per-assistant non-name allowlists.
+  - Returns tokenized user turns and per-turn replacement evidence for trusted provenance checks.
+  - Returns `422` for invalid/over-limit input, `503` when saturated, and `504` on timeout.
+
 - `GET /health`
   - Does not require API key in current code.
   - Returns detector, concurrency, persistence, queue, cache, scope, and performance health metadata.
@@ -99,6 +106,13 @@ Confirmed from `src/server.py`:
 
 - `src/pii_vault.py`
   - Scoped token/value storage and snapshot serialization.
+
+- `src/transcript_replay.py`
+  - Bounded sequential replay using the actual preceding assistant turn and one fresh vault per transcript.
+
+- `src/transcript_audit.py`
+  - Isolated audit executor with dedicated concurrency, acquisition timeout, execution timeout, and health counters.
+  - Does not create, persist, mutate, or clean up live middleware scopes.
 
 - `src/persistence.py`
   - Persistence selector and store implementations.
@@ -150,6 +164,14 @@ Confirmed from `src/config.py` and README:
   - `PII_REDACTOR_REDACT_MAX_CONCURRENCY` defaults `24`.
   - `PII_REDACTOR_REHYDRATE_MAX_CONCURRENCY` defaults `24`.
   - `PII_REDACTOR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS` defaults `0.5`.
+
+- Transcript audit:
+  - `PII_REDACTOR_AUDIT_MAX_TURNS` defaults `200`.
+  - `PII_REDACTOR_AUDIT_MAX_CHARACTERS` defaults `100000`.
+  - Turn and character settings can lower but not exceed those hard request caps.
+  - `PII_REDACTOR_AUDIT_TIMEOUT_SECONDS` defaults `2.0`.
+  - `PII_REDACTOR_AUDIT_MAX_CONCURRENCY` defaults `2`.
+  - `PII_REDACTOR_AUDIT_ACQUIRE_TIMEOUT_SECONDS` defaults `0.1`.
 
 - Persistence:
   - `PII_REDACTOR_PERSISTENCE_MODE` defaults `none`.
@@ -209,6 +231,8 @@ Confirmed from repo:
 7. `/rehydrate` replaces known scoped tokens with original values and reports placeholder repair diagnostics.
 8. Middleware queues persistence writes/deletes when persistence is enabled.
 9. Endpoint returns redacted or clean text, or a `503` on saturation/unavailability.
+
+`/audit/transcript` is deliberately separate from this live flow: it creates an ephemeral vault inside a bounded worker, returns evidence to the authenticated caller, and never reads or writes middleware vault persistence.
 
 ## Packaging
 
@@ -315,6 +339,8 @@ Confirmed from repo:
 - `tests/test_server_detector_requirements.py`
 - `tests/test_shadow_live_transcript_cleaner.py`
 - `tests/test_transcript_cleaner.py`
+- `tests/test_transcript_replay.py`
+- `tests/test_transcript_audit.py`
 
 Coverage themes:
 

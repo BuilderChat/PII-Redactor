@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Sequence
 
+from .config import AUDIT_MAX_CHARACTERS_HARD_LIMIT, AUDIT_MAX_TURNS_HARD_LIMIT
 from .pii_engine import PIIEngine
 from .pii_vault import PIIVault
 
 
-DEFAULT_MAX_REPLAY_TURNS = 200
-DEFAULT_MAX_REPLAY_CHARACTERS = 100_000
+DEFAULT_MAX_REPLAY_TURNS = AUDIT_MAX_TURNS_HARD_LIMIT
+DEFAULT_MAX_REPLAY_CHARACTERS = AUDIT_MAX_CHARACTERS_HARD_LIMIT
 
 ReplayRole = Literal["assistant", "agent", "user"]
 

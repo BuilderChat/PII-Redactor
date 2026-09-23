@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pydantic import ValidationError
+import pytest
 
-from src.schemas import AllowlistRefreshRequest, RedactRequest, RehydrateRequest
+from src.schemas import AuditTranscriptRequest, AllowlistRefreshRequest, RedactRequest, RehydrateRequest
 
 
 def test_thread_id_is_required_and_must_start_with_thread_prefix() -> None:
@@ -101,3 +102,23 @@ def test_allowlist_refresh_defaults_assistant_id_from_client_id() -> None:
         terms=["Windsor"],
     )
     assert request.assistant_id == "client_123_chat_001"
+
+
+def test_audit_transcript_contract_defaults_assistant_and_rejects_malformed_turns() -> None:
+    request = AuditTranscriptRequest(
+        client_id="client_123",
+        turns=[{"role": "user", "content": "hello"}],
+    )
+    assert request.assistant_id == "client_123_chat_001"
+
+    with pytest.raises(ValidationError):
+        AuditTranscriptRequest(
+            client_id="client_123",
+            turns=[{"role": "system", "content": "hello"}],
+        )
+
+    with pytest.raises(ValidationError):
+        AuditTranscriptRequest(
+            client_id="client_123",
+            turns=[{"role": "user", "content": ""}],
+        )

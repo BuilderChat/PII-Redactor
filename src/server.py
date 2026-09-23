@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import hashlib
 import logging
 import os
@@ -15,6 +16,10 @@ from .persistence import PersistenceConfigError, build_vault_store
 from .schemas import (
     AllowlistRefreshRequest,
     AllowlistRefreshResponse,
+    AuditReplacementEvidence,
+    AuditTranscriptRequest,
+    AuditTranscriptResponse,
+    AuditUserTurnResponse,
     HealthResponse,
     RedactRequest,
     RedactResponse,
@@ -22,7 +27,14 @@ from .schemas import (
     RehydrateResponse,
     SessionEndRequest,
     SessionEndResponse,
+    replacement_entity,
 )
+from .transcript_audit import (
+    TranscriptAuditSaturatedError,
+    TranscriptAuditService,
+    TranscriptAuditTimeoutError,
+)
+from .transcript_replay import TranscriptTurn
 
 settings = get_settings()
 LOG_LEVEL = configure_logging(
@@ -50,6 +62,15 @@ middleware = PIIMiddleware(
     persistence_mode=persistence_mode,
     allowlist_cache=allowlist_cache,
 )
+audit_service = TranscriptAuditService(
+    engine=middleware.engine,
+    allowlist_cache=allowlist_cache,
+    max_turns=settings.audit_max_turns,
+    max_characters=settings.audit_max_characters,
+    timeout_seconds=settings.audit_timeout_seconds,
+    max_concurrency=settings.audit_max_concurrency,
+    acquire_timeout_seconds=settings.audit_acquire_timeout_seconds,
+)
 
 detector_status = middleware.detector_status
 if settings.require_gliner:
@@ -75,7 +96,14 @@ if settings.require_presidio:
         LOGGER.error("redactor_startup_failure reason=required_presidio_unavailable")
         raise RuntimeError(f"Presidio required but unavailable at startup: {detail}")
 
-app = FastAPI(title="PII Redactor", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    audit_service.close()
+
+
+app = FastAPI(title="PII Redactor", version="0.1.0", lifespan=_lifespan)
 LOGGER.info(
     "redactor_startup_success persistence_mode=%s log_level=%s log_format=%s access_logs=%s presidio_enabled=%s gliner_enabled=%s",
     persistence_mode,
@@ -150,6 +178,72 @@ def redact(request: RedactRequest) -> RedactResponse:
         active_user_index=result.active_profile,
         replacements=replacements,
     )
+
+
+@app.post(
+    "/audit/transcript",
+    response_model=AuditTranscriptResponse,
+    dependencies=[Depends(_validate_api_key)],
+)
+def audit_transcript(request: AuditTranscriptRequest) -> AuditTranscriptResponse:
+    LOGGER.debug("transcript_audit_start turn_count=%s", len(request.turns))
+    try:
+        result = audit_service.audit(
+            client_id=request.client_id,
+            assistant_id=request.assistant_id,
+            turns=tuple(
+                TranscriptTurn(role=turn.role, content=turn.content)
+                for turn in request.turns
+            ),
+            non_name_allowlist=request.non_name_allowlist,
+        )
+    except TranscriptAuditSaturatedError as exc:
+        LOGGER.warning("transcript_audit_saturated turn_count=%s", len(request.turns))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Transcript audit service saturated",
+        ) from exc
+    except TranscriptAuditTimeoutError as exc:
+        LOGGER.warning("transcript_audit_timeout turn_count=%s", len(request.turns))
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Transcript audit timed out",
+        ) from exc
+    except ValueError as exc:
+        LOGGER.warning("transcript_audit_rejected reason=invalid_transcript")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        LOGGER.exception("transcript_audit_failure error_type=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Transcript audit service unavailable",
+        ) from exc
+
+    user_turns = [
+        AuditUserTurnResponse(
+            turn_index=turn.turn_index,
+            redacted=turn.redacted_text,
+            evidence=[
+                AuditReplacementEvidence(
+                    token=token,
+                    entity=replacement_entity(token),
+                    value=value,
+                )
+                for token, value in turn.replacements.items()
+            ],
+        )
+        for turn in result.user_turns
+    ]
+    evidence_count = sum(len(turn.evidence) for turn in user_turns)
+    LOGGER.debug(
+        "transcript_audit_success user_turn_count=%s evidence_count=%s",
+        len(user_turns),
+        evidence_count,
+    )
+    return AuditTranscriptResponse(user_turns=user_turns)
 
 
 @app.post("/rehydrate", response_model=RehydrateResponse, dependencies=[Depends(_validate_api_key)])
@@ -252,6 +346,7 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     detector_status = middleware.detector_status
+    audit_status = audit_service.status
     persistence_status = str(detector_status.get("persistence_status", "disabled"))
     service_status = (
         "ok"
@@ -267,6 +362,10 @@ def health() -> HealthResponse:
         rehydrate_max_concurrency=int(detector_status.get("rehydrate_max_concurrency", 0)),
         redact_saturated_count=int(detector_status.get("redact_saturated_count", 0)),
         rehydrate_saturated_count=int(detector_status.get("rehydrate_saturated_count", 0)),
+        audit_active=int(audit_status.get("active", 0)),
+        audit_max_concurrency=int(audit_status.get("max_concurrency", 0)),
+        audit_saturated_count=int(audit_status.get("saturated_count", 0)),
+        audit_timeout_count=int(audit_status.get("timeout_count", 0)),
         commit=os.getenv("REDACTOR_COMMIT", "unknown"),
         presidio_enabled=bool(detector_status.get("presidio_enabled")),
         gliner_enabled=bool(detector_status.get("gliner_enabled")),

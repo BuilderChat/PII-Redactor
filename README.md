@@ -9,7 +9,7 @@ This service redacts PII before text reaches an LLM, then rehydrates placeholder
 - Mandatory entities: names, email, phone
 - Token format: `<fn_#>`, `<mn1_#>`, `<mn2_#>`, `<ln_#>`, `<em_#>`, `<ph_#>`
 - Isolation key: `thread_id + session_id + visitor_id + client_id + assistant_id`
-- API surface: REST only (`/redact`, `/rehydrate`, `/session/end`, `/allowlist/refresh`, `/health`)
+- API surface: REST only (`/redact`, `/rehydrate`, `/session/end`, `/allowlist/refresh`, `/audit/transcript`, `/health`)
 - Security: API key (raw or SHA-256 hash verification)
 - Detection backend: tuned deterministic heuristics by default on the `slm` branch
 - Default failure policy: fail-closed (per-request override available)
@@ -125,6 +125,8 @@ Use this order in your app:
 5. Render `clean` text to end users.
 6. Call `/session/end` when the thread ends.
 
+For a final provenance check, trusted backend callers may send the bounded transcript to `/audit/transcript`. This replay is isolated from live session vaults and persistence.
+
 Required scope fields on every request:
 
 - `thread_id` (must start with `thread_`)
@@ -147,6 +149,12 @@ Required scope fields on every request:
   - Stores a per-`client_id+assistant_id` non-name allowlist in local cache files.
   - Rewrites cache file only when extracted term content changes.
   - Supports direct `terms` or selector-based extraction from arbitrary JSON payloads.
+- `/audit/transcript`
+  - Accepts ordered `assistant`, `agent`, and `user` turns plus `client_id` and `assistant_id`.
+  - Uses a fresh vault, the canonical detector, and the same cached/request allowlists as live redaction.
+  - Returns only user-turn indexes, tokenized text, and structured replacement evidence.
+  - Raw evidence is response-only for trusted backend provenance matching; do not log or persist it unencrypted.
+  - Returns `422` for malformed or configured-limit violations, `503` when its worker pool is saturated, and `504` when its response deadline expires.
 
 ### Failure Policy
 
@@ -184,6 +192,7 @@ Required scope fields on every request:
 - `/redact` automatically merges:
   - cached allowlist terms (if present)
   - request `non_name_allowlist` terms (if provided)
+- `/audit/transcript` applies the same scoped allowlist merge without creating a live vault scope.
 
 #### Refresh Payload Selectors
 
@@ -278,10 +287,14 @@ Multi-instance mode (recommended for scale):
 - Use a shared persistence backend so any instance can rehydrate.
 - Keep `thread_id` stable per conversation.
 - Limit concurrent `/redact` and `/rehydrate` work with `PII_REDACTOR_REDACT_MAX_CONCURRENCY`, `PII_REDACTOR_REHYDRATE_MAX_CONCURRENCY`, and `PII_REDACTOR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS`. Saturated requests return `503` quickly instead of accumulating indefinitely.
+- Bound transcript audits with `PII_REDACTOR_AUDIT_MAX_TURNS`, `PII_REDACTOR_AUDIT_MAX_CHARACTERS`, `PII_REDACTOR_AUDIT_TIMEOUT_SECONDS`, `PII_REDACTOR_AUDIT_MAX_CONCURRENCY`, and `PII_REDACTOR_AUDIT_ACQUIRE_TIMEOUT_SECONDS`.
+- Audit turn and character settings may lower, but cannot exceed, the hard caps of 200 turns and 100,000 total characters.
 - Monitor `/health` fields:
   - `redact_active`, `rehydrate_active`
   - `redact_max_concurrency`, `rehydrate_max_concurrency`
   - `redact_saturated_count`, `rehydrate_saturated_count`
+  - `audit_active`, `audit_max_concurrency`
+  - `audit_saturated_count`, `audit_timeout_count`
   - `persistence_queue_depth`, `persistence_queue_max`
   - `persistence_blocking_requests`
   - `status`
