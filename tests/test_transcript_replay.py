@@ -113,7 +113,7 @@ def test_reported_prose_does_not_establish_unsupported_names(
     assert not (unsupported_values & (_values(result, "fn") | _values(result, "ln")))
 
 
-def test_characterizes_current_same_name_false_positive() -> None:
+def test_same_name_referential_reply_does_not_establish_name_evidence() -> None:
     result = _replay(
         [
             ("assistant", "Would you prefer email or phone, and what's your first name?"),
@@ -127,10 +127,9 @@ def test_characterizes_current_same_name_false_positive() -> None:
         ]
     )
 
-    # Phase 2 changes this assertion to require unchanged referential prose.
-    assert result.user_turns[-1].redacted_text == "<fn_1> <ln_1>"
-    assert _values(result, "fn") == {"Same"}
-    assert _values(result, "ln") == {"name"}
+    assert result.user_turns[-1].redacted_text == "Same name"
+    assert _values(result, "fn") == set()
+    assert _values(result, "ln") == set()
 
 
 def test_model_or_tool_pending_value_has_no_user_turn_evidence() -> None:
@@ -152,7 +151,7 @@ def test_model_or_tool_pending_value_has_no_user_turn_evidence() -> None:
     assert result.user_turns[-1].redacted_text == "<ph_1>"
 
 
-def test_characterizes_current_courtesy_prose_false_positive() -> None:
+def test_courtesy_prose_does_not_establish_last_name_evidence() -> None:
     result = _replay(
         [
             ("user", "I purchased land in Harnett County"),
@@ -165,12 +164,11 @@ def test_characterizes_current_courtesy_prose_false_positive() -> None:
         ]
     )
 
-    # Phase 2 changes this assertion to require unchanged courtesy prose.
-    assert result.user_turns[-1].redacted_text == "Thank you <ln_1> very much"
-    assert _values(result, "ln") == {"so"}
+    assert result.user_turns[-1].redacted_text == "Thank you so very much"
+    assert _values(result, "ln") == set()
 
 
-def test_characterizes_current_channel_qualifier_false_positive() -> None:
+def test_parenthetical_channel_qualifier_does_not_establish_name_evidence() -> None:
     result = _replay(
         [
             ("user", "What time are tours available until?"),
@@ -181,9 +179,8 @@ def test_characterizes_current_channel_qualifier_false_positive() -> None:
         ]
     )
 
-    # Phase 2 changes this assertion to require only the phone token.
-    assert result.user_turns[-1].redacted_text == "Phone (<fn_1>) <ph_1>"
-    assert _values(result, "fn") == {"messaging"}
+    assert result.user_turns[-1].redacted_text == "Phone (messaging) <ph_1>"
+    assert _values(result, "fn") == set()
 
 
 @pytest.mark.parametrize(

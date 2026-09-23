@@ -733,6 +733,28 @@ def test_phone_with_parenthetical_name_redacts_parenthetical_name() -> None:
     assert _redact(text) == "Sure <ph_1> (<fn_1>)"
 
 
+def test_contact_with_parenthetical_channel_qualifier_does_not_redact_qualifier() -> None:
+    cases = (
+        "Phone (messaging) 555-123-4567",
+        "Phone (SMS) 555-123-4567",
+        "Phone (texting) 555-123-4567",
+        "Email (email) visitor@example.com",
+    )
+    expected = (
+        "Phone (messaging) <ph_1>",
+        "Phone (SMS) <ph_1>",
+        "Phone (texting) <ph_1>",
+        "Email (email) <em_1>",
+    )
+    for text, redacted in zip(cases, expected):
+        assert _redact(text) == redacted
+
+
+def test_messaging_remains_protectable_as_an_explicit_name() -> None:
+    assert _redact("My first name is Messaging") == "My first name is <fn_1>"
+    assert _redact("Messaging", previous_assistant_message="What's your first name?") == "<fn_1>"
+
+
 def test_first_name_prompt_with_parenthetical_alias_redacts_both_names() -> None:
     prompt = "Great! I'll get your details so the team can reach out. What's your first name?"
     assert _redact("Debbie (Debra)", previous_assistant_message=prompt) == "<fn_1> (<fn_2>)"
@@ -933,6 +955,33 @@ def test_last_name_prompt_with_gratitude_prefix_redacts_last_name_only() -> None
     }
     for text, expected in cases.items():
         assert _redact(text, previous_assistant_message=prompt) == expected
+
+
+def test_last_name_prompt_does_not_redact_gratitude_continuations() -> None:
+    prompt = "Just for our records—what's your last name?"
+    cases = (
+        "Thank you so very much",
+        "Thank you very much",
+        "Thank you so much for your help",
+        "Thanks so much!",
+    )
+    for text in cases:
+        assert _redact(text, previous_assistant_message=prompt) == text
+
+
+def test_so_remains_protectable_as_a_surname() -> None:
+    prompt = "Just for our records—what's your last name?"
+    assert _redact("So", previous_assistant_message=prompt) == "<ln_1>"
+    assert _redact("My last name is So") == "My last name is <ln_1>"
+    assert _redact("Thank you So", previous_assistant_message=prompt) == "Thank you <ln_1>"
+
+
+def test_prompted_same_name_phrase_is_referential_but_explicit_names_remain_protected() -> None:
+    prompt = "Is Regina your first name, or should I use a different name?"
+    assert _redact("Same name", previous_assistant_message=prompt) == "Same name"
+    assert _redact("Same name!", previous_assistant_message=prompt) == "Same name!"
+    assert _redact("My name is Same Name") == "My name is <fn_1> <ln_1>"
+    assert _redact("First name is Same") == "First name is <fn_1>"
 
 
 def test_last_name_prompt_accepts_unicode_apostrophe_last_name() -> None:

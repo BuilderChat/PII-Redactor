@@ -101,6 +101,12 @@ PROMPTED_LAST_NAME_GRATITUDE_RE = re.compile(
     rf"(?:(?:\s*[,.;:!?-]\s*)|\s+)(?P<name>{NAME_WORD_PATTERN})\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_LAST_NAME_COURTESY_CONTINUATION_RE = re.compile(
+    r"^\s*(?:thank\s+you|thanks|thx|ty|thankyou|thank)\b"
+    r"(?:(?:\s*[,.;:!?-]\s*)|\s+)"
+    r"(?:(?:so\s+)?very\s+much|so\s+much)\b",
+    re.IGNORECASE | re.UNICODE,
+)
 COORDINATED_NAME_RE = re.compile(
     r"\b([A-Z][A-Za-z'\-]*)\s+(?:and|&)\s+([A-Za-z][A-Za-z'\-]*)\s+([A-Z][A-Za-z'\-]*)\b"
 )
@@ -742,6 +748,17 @@ CONTACT_CHANNEL_LABEL_WORDS = {
     "tel",
     "telephone",
 }
+CONTACT_PARENTHETICAL_QUALIFIER_WORDS = CONTACT_CHANNEL_LABEL_WORDS | {
+    "calling",
+    "email",
+    "e-mail",
+    "messaging",
+    "sms",
+    "texting",
+}
+PROMPTED_NAME_REFERENTIAL_REPLIES = {
+    "same name",
+}
 _US_STATE_ABBRS = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
     "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
@@ -1340,6 +1357,8 @@ class PIIEngine:
             )
 
         if request_type == "last":
+            if PROMPTED_LAST_NAME_COURTESY_CONTINUATION_RE.match(working_text):
+                return []
             gratitude_match = PROMPTED_LAST_NAME_GRATITUDE_RE.match(working_text)
             if gratitude_match:
                 value = gratitude_match.group("name")
@@ -1944,6 +1963,8 @@ class PIIEngine:
             return []
         value = match.group("name")
         normalized = value.lower()
+        if normalized in CONTACT_PARENTHETICAL_QUALIFIER_WORDS:
+            return []
         if normalized in NON_NAME_SINGLE_WORDS:
             return []
         if normalized in NAME_PREFIX_EXCLUSIONS:
@@ -2941,10 +2962,23 @@ class PIIEngine:
         if self._looks_like_assistant_greeting(text, non_name_terms):
             return True
 
+        normalized_text = self._normalize_text_phrase(text)
+        if self._has_contact_parenthetical_qualifier(text):
+            return True
+        if (
+            assistant_name_request_type == "last"
+            and PROMPTED_LAST_NAME_COURTESY_CONTINUATION_RE.match(text)
+        ):
+            return True
+        if (
+            assistant_name_request_type is not None
+            and normalized_text in PROMPTED_NAME_REFERENTIAL_REPLIES
+        ):
+            return True
+
         if assistant_name_request_type is not None:
             return False
 
-        normalized_text = self._normalize_text_phrase(text)
         if not normalized_text:
             return False
         if normalized_text in HARDCODED_NON_NAME_PHRASES:
@@ -3074,6 +3108,13 @@ class PIIEngine:
         if not normalized:
             return False
         return any(normalized.startswith(prefix) for prefix in NON_USER_CONTACT_LOOKUP_PREFIXES)
+
+    @staticmethod
+    def _has_contact_parenthetical_qualifier(text: str) -> bool:
+        if not (EMAIL_RE.search(text) or PHONE_RE.search(text)):
+            return False
+        match = re.search(rf"\((?P<value>{NAME_WORD_PATTERN})\)", text, flags=re.UNICODE)
+        return bool(match and match.group("value").lower() in CONTACT_PARENTHETICAL_QUALIFIER_WORDS)
 
     def _normalize_non_name_terms(self, terms: list[str] | tuple[str, ...] | None) -> set[str]:
         normalized: set[str] = set()
