@@ -115,6 +115,12 @@ COORDINATED_FULL_NAMES_RE = re.compile(
     r"(?:and|&)\s+"
     r"(?P<first2>[A-Z][A-Za-z'\-]*)\s+(?P<last2>[A-Z][A-Za-z'\-]*)\b"
 )
+RELATED_PERSON_FULL_NAME_RE = re.compile(
+    rf"\bmy\s+(?:wife|husband|spouse|partner)\s*,?\s*"
+    rf"(?P<first>(?=[A-Z]){NAME_WORD_PATTERN})\s+"
+    rf"(?P<last>(?=[A-Z]){NAME_WORD_PATTERN})\b",
+    re.UNICODE,
+)
 THIS_IS_NAME_WITH_CONTEXT_RE = re.compile(
     r"\bthis\s+is\s+(?P<first>[A-Za-z][A-Za-z'\-]*)\s+"
     r"(?P<last>[A-Za-z][A-Za-z'\-]*)\s+(?:with|from|at)\b",
@@ -334,6 +340,7 @@ ASSISTANT_FIRST_ALREADY_CAPTURED_CUES = (
     "have your first name",
     "got your first name",
     "i have your first name",
+    "your first name on file",
 )
 ASSISTANT_PLAN_CONTEXT_CUES = (
     "floor plan",
@@ -2614,6 +2621,26 @@ class PIIEngine:
         non_name_terms: set[str],
     ) -> list[Span]:
         spans: list[Span] = []
+
+        for match in RELATED_PERSON_FULL_NAME_RE.finditer(text):
+            first = match.group("first")
+            last = match.group("last")
+            normalized_parts = [
+                self._normalize_text_phrase(first),
+                self._normalize_text_phrase(last),
+            ]
+            if any(self._is_blocked_name_token(part) for part in normalized_parts):
+                continue
+            if any(part in non_name_terms for part in normalized_parts):
+                continue
+            if self._looks_like_location_non_name_phrase(normalized_parts, non_name_terms):
+                continue
+            spans.extend(
+                (
+                    Span(match.start("first"), match.end("first"), "fn", first),
+                    Span(match.start("last"), match.end("last"), "ln", last),
+                )
+            )
 
         for match in THIS_IS_NAME_WITH_CONTEXT_RE.finditer(text):
             full_value = f"{match.group('first')} {match.group('last')}"

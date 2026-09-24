@@ -183,6 +183,25 @@ def test_first_name_prompt_two_person_shape_requires_clean_tail() -> None:
     assert _redact(text, previous_assistant_message=prompt) == text
 
 
+def test_related_person_full_name_is_redacted_without_name_prompt() -> None:
+    engine = PIIEngine(use_gliner=False, use_presidio=False)
+    vault = PIIVault()
+    assert engine.redact("My name is Martin So", vault).redacted_text == "My name is <fn_1> <ln_1>"
+
+    result = engine.redact(
+        "my wife, Mary D'Angelo and I are moving to Terrapin",
+        vault,
+    )
+
+    assert result.redacted_text == "my wife, <fn_2> <ln_2> and I are moving to Terrapin"
+    assert result.replacements == {"<fn_2>": "Mary", "<ln_2>": "D'Angelo"}
+
+
+def test_related_person_reference_without_full_name_is_not_redacted() -> None:
+    assert _redact("my wife and I are moving to Terrapin") == "my wife and I are moving to Terrapin"
+    assert _redact("my wife likes Terrapin homes") == "my wife likes Terrapin homes"
+
+
 def test_prompted_first_name_does_not_redact_plan_keyword() -> None:
     prompt = "Can I grab your first name?"
     assert _redact("Plan 1", previous_assistant_message=prompt) == "Plan 1"
@@ -1014,6 +1033,14 @@ def test_so_remains_protectable_as_a_surname() -> None:
     assert _redact("So", previous_assistant_message=prompt) == "<ln_1>"
     assert _redact("My last name is So") == "My last name is <ln_1>"
     assert _redact("Thank you So", previous_assistant_message=prompt) == "Thank you <ln_1>"
+
+
+def test_first_name_on_file_then_last_name_prompt_redacts_surname() -> None:
+    prompt = (
+        "Perfect! I've got <em_1> and your first name on file. Kate will reach out shortly. "
+        "Just for our records—what's your last name?"
+    )
+    assert _redact("Bravo", previous_assistant_message=prompt) == "<ln_1>"
 
 
 def test_prompted_same_name_phrase_is_referential_but_explicit_names_remain_protected() -> None:
