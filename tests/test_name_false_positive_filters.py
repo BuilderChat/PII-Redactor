@@ -196,10 +196,20 @@ def test_related_person_full_name_is_redacted_without_name_prompt() -> None:
     assert result.redacted_text == "my wife, <fn_2> <ln_2> and I are moving to Terrapin"
     assert result.replacements == {"<fn_2>": "Mary", "<ln_2>": "D'Angelo"}
 
+    prefixed_result = engine.redact(
+        "No. My wife, Mary D'Angelo and I are moving to Terrapin",
+        vault,
+    )
+
+    assert prefixed_result.redacted_text == (
+        "No. My wife, <fn_2> <ln_2> and I are moving to Terrapin"
+    )
+
 
 def test_related_person_reference_without_full_name_is_not_redacted() -> None:
     assert _redact("my wife and I are moving to Terrapin") == "my wife and I are moving to Terrapin"
     assert _redact("my wife likes Terrapin homes") == "my wife likes Terrapin homes"
+    assert _redact("My wife likes Terrapin homes") == "My wife likes Terrapin homes"
 
 
 def test_prompted_first_name_does_not_redact_plan_keyword() -> None:

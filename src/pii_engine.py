@@ -116,7 +116,7 @@ COORDINATED_FULL_NAMES_RE = re.compile(
     r"(?P<first2>[A-Z][A-Za-z'\-]*)\s+(?P<last2>[A-Z][A-Za-z'\-]*)\b"
 )
 RELATED_PERSON_FULL_NAME_RE = re.compile(
-    rf"\bmy\s+(?:wife|husband|spouse|partner)\s*,?\s*"
+    rf"(?i:\bmy\s+(?:wife|husband|spouse|partner)\s*,?\s*)"
     rf"(?P<first>(?=[A-Z]){NAME_WORD_PATTERN})\s+"
     rf"(?P<last>(?=[A-Z]){NAME_WORD_PATTERN})\b",
     re.UNICODE,
