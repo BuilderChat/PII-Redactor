@@ -217,7 +217,7 @@ def audit_transcript(request: AuditTranscriptRequest) -> AuditTranscriptResponse
     except ValueError as exc:
         LOGGER.warning("transcript_audit_rejected reason=invalid_transcript")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     except Exception as exc:
@@ -315,7 +315,7 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
             terms.extend(extract_allowlist_terms(request.payload, selectors))
         except ValueError as exc:
             LOGGER.warning("allowlist_refresh_rejected reason=invalid_selector_payload")
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     try:
         result = allowlist_cache.refresh(
@@ -326,7 +326,7 @@ def refresh_allowlist(request: AllowlistRefreshRequest) -> AllowlistRefreshRespo
         )
     except ValueError as exc:
         LOGGER.warning("allowlist_refresh_rejected reason=invalid_terms")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     LOGGER.debug(
         "allowlist_refresh_success client_id=%s assistant_id=%s term_count=%s changed=%s",
