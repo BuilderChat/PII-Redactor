@@ -217,7 +217,7 @@ def audit_transcript(request: AuditTranscriptRequest) -> AuditTranscriptResponse
     except ValueError as exc:
         LOGGER.warning("transcript_audit_rejected reason=invalid_transcript")
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
     except Exception as exc:

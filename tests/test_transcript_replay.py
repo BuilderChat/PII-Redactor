@@ -273,6 +273,50 @@ def test_replay_preserves_two_person_suffix_flow() -> None:
     }
 
 
+@pytest.mark.parametrize('prefix', ['Thank you!', 'Thank you,', 'Thanks.', 'Thx'])
+def test_known_first_after_courtesy_does_not_hide_surname(prefix):
+    result = _replay([
+        ('assistant', "What's your first name?"), ('user', 'Avery'),
+        ('assistant', "Just for our records, what's your last name?"),
+        ('user', f'{prefix} Avery Doyon'),
+    ])
+    assert result.user_turns[-1].redacted_text == f'{prefix} <fn_1> <ln_1>'
+    assert result.token_to_value['<ln_1>'] == 'Doyon'
+
+
+def test_prompted_shared_surname_protects_names_without_assigning_first_person_surname():
+    result = _replay([
+        ('assistant', "Got it! And what's your first name?"),
+        ('user', 'Avery and Morgan Doyon,'),
+        ('assistant', "What's Morgan's first name?"), ('user', 'Morgan Doyon'),
+    ])
+    assert result.user_turns[0].redacted_text == '<fn_1> and <fn_2> <ln_1>,'
+    assert result.user_turns[1].redacted_text == '<fn_2> <ln_1>'
+    assert result.token_to_value == {'<fn_1>': 'Avery', '<fn_2>': 'Morgan', '<ln_1>': 'Doyon'}
+
+
+@pytest.mark.parametrize('reply', [
+    'We and Our Family', 'Windsor and North Augusta', 'Avery and Morgan Doyon will attend',
+    'Price and Floor Plans', 'Not and Not Provided',
+])
+def test_shared_surname_shape_does_not_capture_property_or_prose(reply):
+    result = _replay([('assistant', "What's your first name?"), ('user', reply)])
+    assert result.user_turns[-1].redacted_text == reply
+
+
+def test_shared_surname_reply_respects_runtime_allowlist():
+    result = _replay([('assistant', "What's your first name?"), ('user', 'Avery and Morgan Windsor')], non_name_allowlist=['Windsor'])
+    assert '<ln_' not in result.user_turns[-1].redacted_text
+
+
+def test_gratitude_full_name_recognizes_first_person_after_household_capture():
+    result = _replay([
+        ('assistant', "What's your first name?"), ('user', 'Avery and Morgan Doyon'),
+        ('assistant', "What's your last name?"), ('user', 'Thank you! Avery Doyon'),
+    ])
+    assert result.user_turns[-1].redacted_text == 'Thank you! <fn_1> <ln_1>'
+
+
 @pytest.mark.parametrize(
     ("turns", "kwargs", "message"),
     [

@@ -8,6 +8,17 @@ Audit note as of 2026-09-01: the earlier mismatch where prod Redactor health rep
 
 ## System Purpose
 
+Name parsing update (2026-10-09 source): prompted last-name replies with a courtesy
+prefix followed by the already captured first name now continue to surname parsing.
+An anchored, capitalized shared-surname reply to a first/full-name request supports
+`<fn_1> and <fn_2> <ln_1>` with a clean punctuation-only tail, existing non-name
+filters, and runtime allowlists. This protects both first names without asserting
+a surname for the first person. Transcript replay regressions include courtesy
+prose, property phrases, household association, and allowlisted-place controls.
+The audit invalid-input response retains HTTP 422 using the dependency-compatible
+status constant. Deployment acceptance and ordered probes are tracked in
+`../BuilderChat_Documentation/LAST_NAME_PROPAGATION_ROLLOUT.md`.
+
 PII-Redactor is a middleware-first FastAPI service that redacts sensitive user-provided values before conversational text reaches an LLM, then rehydrates scoped placeholder tokens in model output before text is shown to end users.
 
 Confirmed current scope from repo docs and code:

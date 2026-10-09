@@ -1390,13 +1390,45 @@ class PIIEngine:
             if gratitude_match:
                 value = gratitude_match.group("name")
                 normalized = value.lower()
+                known_firsts = {
+                    self._normalize_text_phrase(raw_value)
+                    for token, raw_value in (vault.items() if vault else {}).items()
+                    if token.startswith('<fn_')
+                }
+                if self._normalize_text_phrase(value) in known_firsts:
+                    # A courtesy prefix may precede the already captured first name.
+                    # Do not return that first name as ln and lose the actual surname.
+                    working_text = working_text[gratitude_match.start("name"):]
+                    base_offset += gratitude_match.start("name")
+                    gratitude_match = None
                 if (
-                    not self._is_blocked_name_token(normalized)
+                    gratitude_match is not None
+                    and not self._is_blocked_name_token(normalized)
                     and self._normalize_text_phrase(value) not in non_name_terms
                 ):
                     return [_span(gratitude_match.start("name"), gratitude_match.end("name"), "ln", value)]
 
         if request_type in {"first", "full"}:
+            shared_surname = re.fullmatch(
+                rf"\s*(?P<f1>(?=[A-Z]){NAME_WORD_PATTERN})\s+(?:and|&)\s+"
+                rf"(?P<f2>(?=[A-Z]){NAME_WORD_PATTERN})\s+(?P<last>(?=[A-Z]){NAME_WORD_PATTERN})\s*[,.!?]*\s*",
+                working_text,
+            )
+            if shared_surname:
+                values = [shared_surname.group(group) for group in ("f1", "f2", "last")]
+                normalized_values = [self._normalize_text_phrase(value) for value in values]
+                if (
+                    not any(self._is_blocked_name_token(value) for value in normalized_values)
+                    and " ".join(normalized_values[-2:]) not in {"floor plans", "not provided"}
+                    and not any(value in non_name_terms for value in normalized_values)
+                    and not self._looks_like_location_non_name_phrase(normalized_values, non_name_terms)
+                ):
+                    # Token order preserves the second person's explicit surname;
+                    # it does not assert a surname for the first person.
+                    return [
+                        _span(shared_surname.start(group), shared_surname.end(group), entity, shared_surname.group(group))
+                        for group, entity in (("f1", "fn"), ("f2", "fn"), ("last", "ln"))
+                    ]
             alias_match = PROMPTED_NAME_ALIAS_RE.match(working_text)
             if alias_match:
                 first = alias_match.group("first")
