@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
+from .business_reply_context import business_answer_ranges, requested_business_field
 from .config import ENTITY_KEYS, NAME_ENTITY_KEYS, get_settings
 from .pii_vault import PIIVault
 
@@ -50,9 +51,10 @@ SPACED_EMAIL_PREFIX_EXCLUSIONS = {
 }
 NAME_JOINER_CHARS = "'’‘`-"
 NAME_WORD_PATTERN = rf"[^\W\d_]+(?:[{re.escape(NAME_JOINER_CHARS)}](?![sS]\b)[^\W\d_]+)*"
+CONTRACTED_NAME_PREFIX_RE = re.compile(r"^\s*(?:my\s+)?name['’]s\s+", re.IGNORECASE)
 NAME_INTRO_RE = re.compile(
-    r"\b(?P<cue>my\s+n(?:ame|amie|ae|me)s?(?:\s+is)?|i\s+am|i'm|this\s+is)\s+"
-    r"(?P<candidate>[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*){0,4})",
+    r"\b(?P<cue>(?:my\s+)?name['’]s|my\s+n(?:ame|amie|ae|me)s?(?:\s+is)?|i\s+am|i'm|this\s+is)\s+"
+    rf"(?P<candidate>{NAME_WORD_PATTERN}(?:\s+{NAME_WORD_PATTERN}){{0,4}})",
     re.IGNORECASE,
 )
 OPENING_GREETING_CONTEXT_RE = re.compile(
@@ -263,6 +265,8 @@ NAME_NOISE_WORDS = {
     "via",
 }
 NAME_CONTEXT_CUES = (
+    "name's",
+    "name’s",
     "my name is",
     "my namie is",
     "my names",
@@ -1155,7 +1159,10 @@ class PIIEngine:
         spans: list[Span] = []
         runtime_non_name_terms = set(self._configured_non_name_terms)
         runtime_non_name_terms.update(self._normalize_non_name_terms(non_name_allowlist))
-        assistant_name_request_type = self._assistant_name_request_type(previous_assistant_message)
+        business_field = requested_business_field(previous_assistant_message)
+        assistant_name_request_type = (
+            None if business_field else self._assistant_name_request_type(previous_assistant_message)
+        )
         if assistant_name_request_type is None:
             assistant_name_request_type = self._pending_name_request_type(
                 text,
@@ -1164,7 +1171,7 @@ class PIIEngine:
             )
         assistant_requests_name = bool(
             assistant_name_request_type
-            or self._assistant_has_explicit_name_request(previous_assistant_message)
+            or (business_field is None and self._assistant_has_explicit_name_request(previous_assistant_message))
         )
         suppress_name_detection = self._should_suppress_name_detection(
             text=text,
@@ -1186,6 +1193,7 @@ class PIIEngine:
         spans.extend(self._detect_email_phone_spans_regex(text))
         spans.extend(self._detect_prompted_spaced_email_spans(text, previous_assistant_message))
         spans.extend(self._detect_prompted_unusual_phone_spans(text, previous_assistant_message))
+        inferred_start = len(spans)
 
         if not suppress_name_detection:
             spans.extend(self._detect_leading_name_with_contact_spans(text, non_name_terms=runtime_non_name_terms))
@@ -1231,6 +1239,16 @@ class PIIEngine:
                     )
                 )
 
+        business_ranges = business_answer_ranges(text, business_field)
+        if business_ranges:
+            # Existing scoped replacements and all contact-channel detection stay
+            # active. Only newly inferred name spans inside business values drop.
+            spans = spans[:inferred_start] + [
+                span
+                for span in spans[inferred_start:]
+                if (span.entity_key != 'name' and span.entity_key not in NAME_ENTITY_KEYS)
+                or not any(start <= span.start and span.end <= end for start, end in business_ranges)
+            ]
         return self._filter_internal_context_spans(text, spans)
 
     @staticmethod
@@ -1357,6 +1375,10 @@ class PIIEngine:
     ) -> list[Span]:
         if request_type not in {"first", "last", "full"}:
             return []
+        if request_type == "last" and CONTRACTED_NAME_PREFIX_RE.match(text):
+            # This is an explicit introduction, not a bare surname answer.
+            # Let NAME_INTRO_RE capture its value rather than assigning ln to 'name'.
+            return []
 
         working_text = text
         base_offset = 0
@@ -1367,6 +1389,10 @@ class PIIEngine:
                 working_text = stripped_text
                 base_offset = stripped_offset
                 had_acknowledgement_prefix = True
+            introduction = CONTRACTED_NAME_PREFIX_RE.match(working_text)
+            if introduction:
+                working_text = working_text[introduction.end():]
+                base_offset += introduction.end()
 
         def _span(
             start: int,
@@ -2689,7 +2715,7 @@ class PIIEngine:
         for match in NAME_INTRO_RE.finditer(text):
             value, keep_chars = self._trim_trailing_name_noise(match.group("candidate"))
             cue = (match.group("cue") or "").lower()
-            if cue.startswith("my n"):
+            if cue.startswith("my n") or cue.startswith(("name's", "name’s")):
                 intro_value, intro_chars = self._extract_name_intro_candidate(match.group("candidate"))
                 if intro_value:
                     value, keep_chars = intro_value, intro_chars
@@ -3082,7 +3108,7 @@ class PIIEngine:
             return True
 
         # Keep explicit name self-identification redaction active.
-        if any(cue in normalized_text for cue in NAME_CONTEXT_CUES):
+        if NAME_INTRO_RE.search(text) or any(cue in normalized_text for cue in NAME_CONTEXT_CUES):
             return False
         if KEYED_NAME_VALUE_RE.search(text) or NAME_LABELLED_REPLY_RE.match(text) or NAME_LABELLED_REPLY_ALT_RE.match(text):
             return False
@@ -3434,6 +3460,10 @@ class PIIEngine:
         keep_index = -1
         for idx, token_match in enumerate(token_matches):
             token = token_match.group(0).lower()
+            if idx >= 2 and token == "from" and idx + 1 < len(token_matches):
+                # A supplied first/last pair may be followed by its company.
+                # Keep From in one/two-part names and as a terminal surname.
+                break
             if idx > 0 and (token in prose_break_words or token in NON_NAME_SINGLE_WORDS):
                 break
             keep_index = idx

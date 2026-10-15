@@ -8,6 +8,16 @@ Audit note as of 2026-09-01: the earlier mismatch where prod Redactor health rep
 
 ## System Purpose
 
+Business collection update (2026-10-15 source): `src/business_reply_context.py`
+recognizes the current company, website, role, or assessment-subject question and
+returns narrow business-value ranges. The engine removes only new inferred name
+spans contained by those ranges, retaining scoped replacements, personal-name
+corrections, explicit pending-name metadata, and email/phone protection. Contracted
+introductions such as `name’s Avery` identify the value instead of tokenizing the
+label. Live redaction and transcript replay share this behavior without an API or
+CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
+coverage, and DEV acceptance steps; this does not establish server deployment.
+
 Name parsing update (2026-10-09 source): prompted last-name replies with a courtesy
 prefix followed by the already captured first name now continue to surname parsing.
 An anchored, capitalized shared-surname reply to a first/full-name request supports
