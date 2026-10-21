@@ -1369,6 +1369,50 @@ class PIIEngine:
 
         return variants
 
+    def _detect_prompted_surname_assertion_prefix(
+        self,
+        text: str,
+        request_type: str,
+        non_name_terms: set[str],
+    ) -> list[Span] | None:
+        """Handle a leading name followed immediately by a labelled surname.
+
+        None leaves ordinary prompted parsing active; an empty list recognizes
+        the shape but rejects its prefix as a personal name.
+        """
+        working_text, base_offset, _has_prefix = self._strip_leading_acknowledgement_prefix(text)
+        if request_type in {"first", "full"}:
+            introduction = CONTRACTED_NAME_PREFIX_RE.match(working_text)
+            if introduction:
+                working_text = working_text[introduction.end():]
+                base_offset += introduction.end()
+        first_match = re.match(rf"^\s*({NAME_WORD_PATTERN})\b", working_text, flags=re.UNICODE)
+        if not first_match:
+            return None
+        surname_match = INLINE_LAST_NAME_IS_RE.search(working_text, first_match.end(1))
+        if not surname_match:
+            return None
+        connector = working_text[first_match.end(1):surname_match.start()]
+        if not re.fullmatch(r"\s*(?:[,;]\s*(?:and\s+)?|and\s+)(?:my\s+)?", connector, re.IGNORECASE):
+            return None
+        labelled_spans = self._detect_name_labelled_reply_spans(working_text, non_name_terms)
+        surname = next((
+            span for span in labelled_spans
+            if span.entity_key == "ln" and span.start == surname_match.start("name")
+        ), None)
+        if surname is None:
+            return None
+        value = first_match.group(1)
+        if (
+            self._is_blocked_name_token(value.lower())
+            or value.lower() in PROMPTED_NAME_REPLY_NON_NAME_STARTERS
+            or self._normalize_text_phrase(value) in non_name_terms
+        ):
+            return []
+        # A repeated explicitly supplied surname is not evidence of a first name.
+        entity = "ln" if value.casefold() == surname.value.casefold() else "fn"
+        return [Span(first_match.start(1) + base_offset, first_match.end(1) + base_offset, entity, value)]
+
     def _detect_prompted_name_reply_spans(
         self,
         text: str,
@@ -1382,6 +1426,12 @@ class PIIEngine:
             # This is an explicit introduction, not a bare surname answer.
             # Let NAME_INTRO_RE capture its value rather than assigning ln to 'name'.
             return []
+
+        assertion_prefix = self._detect_prompted_surname_assertion_prefix(text, request_type, non_name_terms)
+        if assertion_prefix is not None:
+            # Explicit surname evidence takes precedence over last-name fallback
+            # and courtesy parsing, which otherwise assign ln to the first word.
+            return assertion_prefix
 
         working_text = text
         base_offset = 0
@@ -1588,21 +1638,6 @@ class PIIEngine:
                     return [_span(match.start(1), match.end(1), "fn", value)]
                 if request_type == "last":
                     return [_span(match.start(1), match.end(1), "ln", value)]
-
-        if request_type in {"first", "full"}:
-            # A prompted first name can precede an explicitly labelled surname.
-            # Require both a narrow connector and an independently accepted ln
-            # span; arbitrary sentence continuations still follow the guards below.
-            surname_match = INLINE_LAST_NAME_IS_RE.search(working_text, match.end(1))
-            if surname_match:
-                connector = working_text[match.end(1):surname_match.start()]
-                if re.fullmatch(r"\s*(?:[,;]\s*(?:and\s+)?|and\s+)(?:my\s+)?", connector, re.IGNORECASE):
-                    labelled_spans = self._detect_name_labelled_reply_spans(working_text, non_name_terms)
-                    if any(
-                        span.entity_key == "ln" and span.start == surname_match.start("name")
-                        for span in labelled_spans
-                    ):
-                        return [_span(match.start(1), match.end(1), "fn", value)]
 
         # First-name asks often receive "Name, email phone" in one line.
         # Keep this deterministic: redact only the leading token when contact appears later.

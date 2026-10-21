@@ -26,9 +26,12 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
-Name parsing update (2026-10-21 source): first/full-name replies such as
+Name parsing update (2026-10-21 source): first/full/last-name replies such as
 `Victor and last name is Doyon` capture the leading first name when an immediate
-connector precedes a validated surname assertion. Keyed name values stop before
+connector precedes a validated surname assertion. This runs before last-name
+courtesy/fallback parsing to avoid assigning ln to the leading first name;
+repeated identical surname values stay ln without inventing fn evidence.
+Keyed name values stop before
 another name label, keeping `First name is Victor and last name is Doyon` as
 separate fn/ln evidence. Live detection and transcript replay share the fix;
 see `docs/PROMPTED_NAME_SURNAME_ASSERTIONS.md` for limits and DEV verification.
