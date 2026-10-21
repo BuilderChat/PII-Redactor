@@ -360,7 +360,36 @@ create index if not exists idx_pii_vault_snapshots_scope
 
 create index if not exists idx_pii_vault_snapshots_expires_at
   on public.pii_vault_snapshots (expires_at);
+
+-- Required for this backend's REST save/load/delete, including upserts.
+grant select, insert, update, delete
+  on public.pii_vault_snapshots to service_role;
 ```
+
+The internal store uses Supabase's `/rest/v1/` Data API, not a direct PostgreSQL
+connection. Supabase's [October 30, 2026 change](https://github.com/orgs/supabase/discussions/45329)
+removes automatic Data API grants for **new** public tables on existing projects;
+existing tables keep their grants. Include the explicit `service_role` grant
+above whenever creating or recreating this table, including fresh/preview/reset
+environments. Substitute the configured table name when
+`PII_REDACTOR_SUPABASE_TABLE` differs. The text primary key needs no sequence grant.
+The role also needs `USAGE` on the schema and the schema must be exposed in the
+project's Data API settings; verify those rather than assuming table grants alone
+prove access. Bypassing RLS does not give `service_role` missing table privileges.
+
+Do not grant vault access to `anon` or `authenticated`. Existing installations
+must separately review their actual grants and RLS: `CREATE TABLE IF NOT EXISTS`
+does not repair those, and the cutoff will not revoke old grants. Any RLS/revoke
+change requires a reviewed security rollout; this setup example does not apply
+one. Table provisioning is still README-based and is not automatically applied
+by CentralApp's migration runner or by Redactor startup. Moving it into a formal
+Redactor-owned migration workflow remains outstanding.
+
+For read-only DEV/PROD privilege checks and scoped persistence acceptance, see
+the [cross-repo migration guidance](../CentralApp/READMEs/DATABASE_MIGRATIONS.md#target-environment-verification).
+Do not rerun the full table setup against an existing database merely because
+of the email; first establish whether its current grants already satisfy the
+configured backend.
 
 ### Example `.env` (Internal Supabase)
 

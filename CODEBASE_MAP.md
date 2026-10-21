@@ -8,6 +8,14 @@ Audit note as of 2026-09-01: the earlier mismatch where prod Redactor health rep
 
 ## System Purpose
 
+Supabase grant review (2026-10-20 source): `src/persistence.py` uses the Data API
+with `service_role` for vault save/upsert, load and delete. Existing table grants
+survive the October 30, 2026 default-grant change, but newly created/recreated
+tables need explicit service-role CRUD privileges. The [README setup](README.md#supabase-persistence-guidance)
+now includes that grant and links DEV/PROD checks. Formal Redactor-owned schema
+migrations remain outstanding; this source review does not verify live grants
+or change RLS, project settings or deployed persistence.
+
 Business collection update (2026-10-15 source): `src/business_reply_context.py`
 recognizes the current company, website, role, or assessment-subject question and
 returns narrow business-value ranges. The engine removes only new inferred name
@@ -17,6 +25,14 @@ introductions such as `name’s Avery` identify the value instead of tokenizing 
 label. Live redaction and transcript replay share this behavior without an API or
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
+
+Name parsing update (2026-10-21 source): first/full-name replies such as
+`Victor and last name is Doyon` capture the leading first name when an immediate
+connector precedes a validated surname assertion. Keyed name values stop before
+another name label, keeping `First name is Victor and last name is Doyon` as
+separate fn/ln evidence. Live detection and transcript replay share the fix;
+see `docs/PROMPTED_NAME_SURNAME_ASSERTIONS.md` for limits and DEV verification.
+Local validation does not establish deployment or repair existing records.
 
 Name parsing update (2026-10-09 source): prompted last-name replies with a courtesy
 prefix followed by the already captured first name now continue to surname parsing.

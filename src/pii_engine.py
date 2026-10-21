@@ -156,7 +156,10 @@ REVERSED_NAME_LABEL_RE = re.compile(
 KEYED_NAME_VALUE_RE = re.compile(
     r"\b(?P<label>(?:your\s+)?name(?:\s*\(\s*first\s*(?:and|&)\s*last\s*\))?|names|first\s*name|last\s*name|lastname)"
     r"\s*(?::|\-|\bis\b)\s*"
-    rf"(?P<value>{NAME_WORD_PATTERN}(?:\s+{NAME_WORD_PATTERN}){{0,2}})",
+    # Do not consume 'and last' (or another field label) as part of this value.
+    rf"(?P<value>{NAME_WORD_PATTERN}(?:\s+"
+    r"(?!(?:and\s+)?(?:my\s+)?(?:first\s*name|last\s*name|lastname|surname|family\s+name)\b)"
+    rf"{NAME_WORD_PATTERN}){{0,2}})",
     re.IGNORECASE,
 )
 REALTOR_PAIR_INTRO_RE = re.compile(
@@ -1585,6 +1588,21 @@ class PIIEngine:
                     return [_span(match.start(1), match.end(1), "fn", value)]
                 if request_type == "last":
                     return [_span(match.start(1), match.end(1), "ln", value)]
+
+        if request_type in {"first", "full"}:
+            # A prompted first name can precede an explicitly labelled surname.
+            # Require both a narrow connector and an independently accepted ln
+            # span; arbitrary sentence continuations still follow the guards below.
+            surname_match = INLINE_LAST_NAME_IS_RE.search(working_text, match.end(1))
+            if surname_match:
+                connector = working_text[match.end(1):surname_match.start()]
+                if re.fullmatch(r"\s*(?:[,;]\s*(?:and\s+)?|and\s+)(?:my\s+)?", connector, re.IGNORECASE):
+                    labelled_spans = self._detect_name_labelled_reply_spans(working_text, non_name_terms)
+                    if any(
+                        span.entity_key == "ln" and span.start == surname_match.start("name")
+                        for span in labelled_spans
+                    ):
+                        return [_span(match.start(1), match.end(1), "fn", value)]
 
         # First-name asks often receive "Name, email phone" in one line.
         # Keep this deterministic: redact only the leading token when contact appears later.
