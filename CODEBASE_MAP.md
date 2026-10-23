@@ -8,6 +8,16 @@ Audit note as of 2026-09-01: the earlier mismatch where prod Redactor health rep
 
 ## System Purpose
 
+SMS contact replies (2026-10-23 source): the canonical engine handles a capitalized
+single name following a leading email/phone when an actual name request applies,
+using the existing prompted parser/allowlist guards. Unspaced hyphenated names
+remain one value, while spaced/explicit aliases retain their behavior. Cancellation/
+control words and question starters are excluded from the affected inferred-name
+paths. API shape, persistence and failure policy are unchanged. CentralApp's live
+SMS context reader is a separate companion change; see
+[`docs/SMS_CONTACT_REPLY_CONTEXT.md`](docs/SMS_CONTACT_REPLY_CONTEXT.md) for limits,
+offline evidence and ordered DEV rollout. No server acceptance is implied.
+
 Supabase grant review (2026-10-20 source): `src/persistence.py` uses the Data API
 with `service_role` for vault save/upsert, load and delete. Existing table grants
 survive the October 30, 2026 default-grant change, but newly created/recreated

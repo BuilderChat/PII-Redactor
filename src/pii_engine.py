@@ -454,6 +454,11 @@ NAME_PREFIX_EXCLUSIONS = {
     "under",
 }
 NON_NAME_SINGLE_WORDS = {
+    "cancel",
+    "stop",
+    "start",
+    "help",
+    "unsubscribe",
     "yes",
     "no",
     "we",
@@ -1509,7 +1514,9 @@ class PIIEngine:
                         for group, entity in (("f1", "fn"), ("f2", "fn"), ("last", "ln"))
                     ]
             alias_match = PROMPTED_NAME_ALIAS_RE.match(working_text)
-            if alias_match:
+            # An unspaced hyphenated name is one value, not a dash alias.
+            # Spaced aliases and explicit 'short for' replies retain their path.
+            if alias_match and not re.fullmatch(rf"\s*{NAME_WORD_PATTERN}\s*[.!?]?\s*", working_text):
                 first = alias_match.group("first")
                 alias = alias_match.group("paren") or alias_match.group("dash_phrase") or alias_match.group("dash")
                 if first and alias:
@@ -1965,6 +1972,8 @@ class PIIEngine:
         second = match.group(2)
         first_normalized = first.lower()
         second_normalized = second.lower()
+        if first_normalized in PROMPTED_NAME_REPLY_NON_NAME_STARTERS:
+            return []
         if first_normalized in NON_NAME_SINGLE_WORDS or second_normalized in NON_NAME_SINGLE_WORDS:
             return []
         if second_normalized in {"name", "email", "phone", "number", "contact"}:
@@ -1996,6 +2005,8 @@ class PIIEngine:
         second = match.group(2)
         first_normalized = first.lower()
         second_normalized = second.lower()
+        if first_normalized in PROMPTED_NAME_REPLY_NON_NAME_STARTERS:
+            return []
         if first_normalized in NON_NAME_SINGLE_WORDS or second_normalized in NON_NAME_SINGLE_WORDS:
             return []
         if first_normalized in NAME_PREFIX_EXCLUSIONS or second_normalized in NAME_PREFIX_EXCLUSIONS:
@@ -2065,6 +2076,26 @@ class PIIEngine:
         if not tail:
             return []
 
+        # A single volunteered name after a contact channel needs an actual name
+        # request. Reuse prompted parsing and its non-name/allowlist guards; do
+        # not guess that any leftover word is a name or consume arbitrary prose.
+        if (
+            request_type in {"first", "full", "last"}
+            and not text[:contact_match.start()].strip()
+            and tail.lstrip()[:1].isupper()
+            and re.fullmatch(
+                rf"\s*{NAME_WORD_PATTERN}\s*[.!?]?\s*", tail, flags=re.UNICODE,
+            )
+        ):
+            offset = contact_match.end() + bridge_end
+            return [
+                Span(span.start + offset, span.end + offset, span.entity_key, span.value,
+                     prefer_latest=span.prefer_latest)
+                for span in self._detect_prompted_name_reply_spans(
+                    tail, vault=None, request_type=request_type, non_name_terms=non_name_terms,
+                )
+            ]
+
         match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b", tail, flags=re.UNICODE)
         if not match:
             return []
@@ -2075,6 +2106,8 @@ class PIIEngine:
             return []
         first_normalized = first.lower()
         second_normalized = second.lower()
+        if first_normalized in PROMPTED_NAME_REPLY_NON_NAME_STARTERS:
+            return []
         if first_normalized in NON_NAME_SINGLE_WORDS or second_normalized in NON_NAME_SINGLE_WORDS:
             return []
         if first_normalized in NAME_PREFIX_EXCLUSIONS or second_normalized in NAME_PREFIX_EXCLUSIONS:
