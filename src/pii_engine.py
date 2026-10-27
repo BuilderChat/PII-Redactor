@@ -92,6 +92,10 @@ PROMPTED_LAST_NAME_SENTENCE_TAIL_RE = re.compile(
     r"^\s*[.!?]\s+(?:we|i|my|our|also)\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_LAST_NAME_COURTESY_TAIL_RE = re.compile(
+    r"^\s*[.!?]\s+(?:with\s+thanks|thanks|thank\s+you)\b",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_NAME_POSSESSIVE_SUFFIX_RE = re.compile(r"^\s*['’‘`]s\b", re.IGNORECASE | re.UNICODE)
 NAME_CORRECTION_NEGATIVE_CONTACT_TAIL_RE = re.compile(
     r"^\s+(?:and\s+)?(?:no|nope|nah|none|not\s+(?:now|yet|right\s+now))"
@@ -1630,6 +1634,12 @@ class PIIEngine:
         first_word_in_non_name_terms = self._normalize_text_phrase(value) in non_name_terms
         if first_word_in_non_name_terms and request_type != "full":
             return []
+
+        if request_type == "last" and PROMPTED_LAST_NAME_COURTESY_TAIL_RE.match(working_text[match.end(1):]):
+            # A sentence boundary ends this surname answer. Handle the narrow
+            # courtesy continuation before 'with/thanks' hits multiword guards;
+            # lowercase surnames remain valid after an explicit last-name ask.
+            return [_span(match.start(1), match.end(1), "ln", value)]
 
         # Support "name + contact" replies under prompted name collection flows:
         # - first-name prompt: "Lynn 925.963.1940"

@@ -36,6 +36,14 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-10-27 source): a prompted single-word surname followed
+by sentence punctuation and `with thanks`, `thanks`, or `thank you` is captured
+before multiword guards reject the courtesy text. Lowercase, Unicode and joined
+surname values retain existing blocked-word/allowlist checks. Only the surname
+is captured; contact detection and follow-up prose remain active. Live detection
+and audit replay share this rule. See `docs/PROMPTED_SURNAME_COURTESY_TAIL.md` for
+validation and DEV acceptance; deployment has not been verified.
+
 Name parsing update (2026-10-21 source): first/full/last-name replies such as
 `Victor and last name is Doyon` capture the leading first name when an immediate
 connector precedes a validated surname assertion. This runs before last-name
