@@ -172,6 +172,12 @@ REALTOR_PAIR_INTRO_RE = re.compile(
     r"(?P<cue>realtor(?:s)?|agent(?:s)?|broker(?:s)?)\b",
     re.IGNORECASE | re.UNICODE,
 )
+PROMPTED_NAME_CALLBACK_TAIL_RE = re.compile(
+    r"^(?:\s+|\s*[,.;:!?]\s*)please\s+(?:have|ask)\s+"
+    r"(?:someone|the\s+team|a\s+team\s+member)\s+(?:to\s+)?"
+    r"(?:reach\s+out\s+to\s+me|call\s+me|contact\s+me)\s*[.!?]*\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
 PROMPTED_NAME_PROFESSIONAL_TAIL_RE = re.compile(
     r"^\s*,\s*(?:realtor|agent|broker)\b"
     r"(?:\s*,?\s*(?:[A-Z]\.?\s*)?\d[\d.\- ]*)?\s*[.!?]?\s*$",
@@ -1871,7 +1877,7 @@ class PIIEngine:
             if full_match:
                 full_value = f"{full_match.group(1)} {full_match.group(2)}"
                 full_normalized = self._normalize_text_phrase(full_value)
-                tail_after_full = text[full_match.end(2) :]
+                tail_after_full = working_text[full_match.end(2) :]
                 tail_after_full_stripped = re.sub(r"^[\s,;:\-]+", "", tail_after_full)
                 has_contact_tail = bool(
                     tail_after_full_stripped
@@ -1881,6 +1887,18 @@ class PIIEngine:
                 has_professional_title_tail = request_type in {"first", "full"} and bool(
                     PROMPTED_NAME_PROFESSIONAL_TAIL_RE.match(tail_after_full)
                 )
+                has_callback_tail = request_type in {"first", "full"} and bool(
+                    PROMPTED_NAME_CALLBACK_TAIL_RE.fullmatch(tail_after_full)
+                )
+                if has_callback_tail and (
+                    full_normalized in HARDCODED_NON_NAME_PHRASES
+                    or full_normalized in LOCATION_CUE_PHRASES
+                    or any(start == 0 and end == len(full_value)
+                           for start, end in business_answer_ranges(full_value, "role"))
+                ):
+                    # Reuse known phrase/title boundaries; a request to call does
+                    # not turn a business value into a personal name.
+                    has_callback_tail = False
                 allow_lower_second = request_type == "full" and (
                     has_contact_anywhere
                     or (len(words) == 2 and not tail_after_full_stripped and not first_word_in_non_name_terms)
@@ -1903,6 +1921,7 @@ class PIIEngine:
                         or has_contact_tail
                         or has_contact_anywhere
                         or has_professional_title_tail
+                        or has_callback_tail
                     )
                 ):
                     return [

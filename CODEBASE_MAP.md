@@ -36,6 +36,14 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-10-28 source): first/full-name replies can include a
+narrow immediate callback request after a leading two-part name, with optional
+punctuation. Only the name is tokenized; existing scoped community allowlists,
+location filters, known business titles and housing phrases remain protected.
+The full-name tail uses prefix-adjusted offsets. See
+`docs/PROMPTED_NAME_CALLBACK_TAIL.md` for limits, allowlist wiring and DEV checks.
+Deployment is unverified.
+
 Name parsing update (2026-10-27 source): a prompted single-word surname followed
 by sentence punctuation and `with thanks`, `thanks`, or `thank you` is captured
 before multiword guards reject the courtesy text. Lowercase, Unicode and joined
