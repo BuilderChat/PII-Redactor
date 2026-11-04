@@ -36,6 +36,22 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-11-04 source): channel-labelled replies such as
+`phone- Avery Doyon- [number]` capture the intervening two-part name only with
+a matching real contact value and separators, reusing name/contact filters.
+Prompted short apology answers such as `Sorry. Avery` preserve the prefix and
+capture the answer; punctuation-only surname endings retain ln instead of
+falling through to generic fn detection. Live and audit replay share the rules.
+See `docs/CHANNEL_NAMES_AND_APOLOGY_REPLIES.md` for limits and DEV verification;
+deployment has not been verified.
+
+Name parsing update (2026-10-29 source): the acknowledgment-plus-contact name
+detector rejects leading directives such as `sure have her text me`, using a
+bounded verb/recipient pattern rather than global name exclusions or whole-turn
+suppression. Phone/email detection, explicit introductions and existing scoped
+names remain active. See `docs/AFFIRMATIVE_CONTACT_DIRECTIVES.md` for coverage,
+limits and DEV checks. No deployment has been verified.
+
 Name parsing update (2026-10-28 source): first/full-name replies can include a
 narrow immediate callback request after a leading two-part name, with optional
 punctuation. Only the name is tokenized; existing scoped community allowlists,

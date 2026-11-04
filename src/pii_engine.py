@@ -68,8 +68,22 @@ CASUAL_IM_NAME_INTRO_RE = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 NAME_REPLY_RE = re.compile(r"^\s*[A-Z][A-Za-z'\-]*(?:\s+[A-Z][A-Za-z'\-]*){0,4}[.!?]?\s*$")
+PROMPTED_APOLOGY_NAME_RE = re.compile(
+    rf"^\s*sorry\s*[.,!]\s+(?P<name>{NAME_WORD_PATTERN}(?:\s+{NAME_WORD_PATTERN})?)\s*[.!?]?\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
+CHANNEL_NAME_PREFIX_RE = re.compile(r"^\s*(?P<channel>phone|email)\s*[-–—:]\s*", re.I)
 ACKNOWLEDGEMENT_PREFIX_RE = re.compile(
     r"^\s*(?:yes|yeah|yep|yup|sure|ok|okay)\b(?:\s*[,.;:!?]+\s*|\s*[-–—]\s*|\s+)",
+    re.IGNORECASE | re.UNICODE,
+)
+CONTACT_DIRECTIVE_PREFIX_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:have|get|ask|tell|make)\s+"
+    r"(?:her|him|them|someone|somebody|anyone|anybody|"
+    r"(?:those|these)\s+(?:guys|people|folks)|"
+    r"(?:the|your|our|a|an)\s+(?:sales\s+)?"
+    r"(?:team|salesperson|salespeople|representative|rep|consultant|agent|person|manager)|"
+    r"one\s+of\s+(?:the|your|our)\s+(?:salespeople|representatives|reps|consultants|agents|team))\b",
     re.IGNORECASE | re.UNICODE,
 )
 PROMPTED_NAME_EXPLANATION_TAIL_RE = re.compile(
@@ -1214,6 +1228,7 @@ class PIIEngine:
         inferred_start = len(spans)
 
         if not suppress_name_detection:
+            spans.extend(self._detect_channel_labelled_name_spans(text, runtime_non_name_terms))
             spans.extend(self._detect_leading_name_with_contact_spans(text, non_name_terms=runtime_non_name_terms))
             spans.extend(
                 self._detect_contact_then_name_spans(
@@ -1437,6 +1452,16 @@ class PIIEngine:
     ) -> list[Span]:
         if request_type not in {"first", "last", "full"}:
             return []
+        apology = PROMPTED_APOLOGY_NAME_RE.fullmatch(text)
+        if apology:
+            # Only a complete short answer can lose an apology prefix. Reuse
+            # prompted parsing so refusal, allowlist and entity rules still apply.
+            value = apology.group("name")
+            return [
+                Span(span.start + apology.start("name"), span.end + apology.start("name"),
+                     span.entity_key, span.value, prefer_latest=span.prefer_latest)
+                for span in self._detect_prompted_name_reply_spans(value, vault, request_type, non_name_terms)
+            ]
         if request_type == "last" and CONTRACTED_NAME_PREFIX_RE.match(text):
             # This is an explicit introduction, not a bare surname answer.
             # Let NAME_INTRO_RE capture its value rather than assigning ln to 'name'.
@@ -1965,7 +1990,9 @@ class PIIEngine:
             stripped_tail = tail_text.strip()
             if stripped_tail:
                 lstripped_tail = tail_text.lstrip()
-                if lstripped_tail.startswith(","):
+                if re.fullmatch(r"[.!?]+", stripped_tail):
+                    pass
+                elif lstripped_tail.startswith(","):
                     pass
                 elif EMAIL_RE.match(stripped_tail) or PHONE_RE.match(stripped_tail):
                     pass
@@ -1991,6 +2018,10 @@ class PIIEngine:
     def _detect_affirmative_name_contact_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
         stripped_text, base_offset, has_prefix = self._strip_leading_acknowledgement_prefix(text)
         if not has_prefix:
+            return []
+        if CONTACT_DIRECTIVE_PREFIX_RE.match(stripped_text):
+            # 'Sure have her text me ... <phone>' supplies permission/contact,
+            # not a first/last name. Keep other detectors active for actual PII.
             return []
 
         match = re.match(rf"^\s*({NAME_WORD_PATTERN})\s+({NAME_WORD_PATTERN})\b", stripped_text, flags=re.UNICODE)
@@ -2024,6 +2055,31 @@ class PIIEngine:
         return [
             Span(match.start(1) + base_offset, match.end(1) + base_offset, "fn", first),
             Span(match.start(2) + base_offset, match.end(2) + base_offset, "ln", second),
+        ]
+
+    def _detect_channel_labelled_name_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
+        prefix = CHANNEL_NAME_PREFIX_RE.match(text)
+        if not prefix:
+            return []
+        tail = text[prefix.end():]
+        pair = re.match(rf"^(?P<name>{NAME_WORD_PATTERN}\s+{NAME_WORD_PATTERN})(?P<separator>\s*[-–—,:]\s*)", tail)
+        if not pair:
+            return []
+        contact_text = tail[pair.end():].strip().rstrip(".!?")
+        contact_pattern = PHONE_RE if prefix.group("channel").lower() == "phone" else EMAIL_RE
+        if not contact_pattern.fullmatch(contact_text):
+            return []
+        name = pair.group("name")
+        normalized = self._normalize_text_phrase(name)
+        if (
+            normalized in HARDCODED_NON_NAME_PHRASES or normalized in LOCATION_CUE_PHRASES
+            or CONTACT_DIRECTIVE_PREFIX_RE.match(name)
+            or any(start == 0 and end == len(name) for start, end in business_answer_ranges(name, "role"))
+        ):
+            return []
+        return [
+            Span(span.start + prefix.end(), span.end + prefix.end(), span.entity_key, span.value)
+            for span in self._detect_leading_name_with_contact_spans(tail, non_name_terms)
         ]
 
     def _detect_leading_name_with_contact_spans(self, text: str, non_name_terms: set[str]) -> list[Span]:
