@@ -36,6 +36,13 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-11-11 source): a bounded email-confirmation plus
+surname-label reply such as `correct email last name doyon` now captures the
+surname without requiring `is`. The whole reply must match the confirmation,
+label and single surname shape; existing surname filters/allowlists remain active.
+See `docs/CONFIRMED_EMAIL_SURNAME.md` for limits, regression coverage and DEV
+acceptance. Deployment has not been verified.
+
 Name parsing update (2026-11-04 source): channel-labelled replies such as
 `phone- Avery Doyon- [number]` capture the intervening two-part name only with
 a matching real contact value and separators, reusing name/contact filters.

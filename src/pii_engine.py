@@ -166,6 +166,13 @@ INLINE_LAST_NAME_IS_RE = re.compile(
     rf"\b(?:last\s*name|lastname|surname|family\s+name)\s+is\s+(?P<name>{NAME_WORD_PATTERN})\b",
     re.IGNORECASE | re.UNICODE,
 )
+CONFIRMED_EMAIL_SURNAME_REPLY_RE = re.compile(
+    r"^\s*(?:correct\s+email|(?:the\s+)?email\s+(?:is\s+)?(?:correct|right))"
+    r"(?:\s*[,.;!]\s*|\s+)(?:my\s+)?"
+    r"(?P<label>last\s*name|lastname|surname|family\s+name)\s+"
+    rf"(?P<name>{NAME_WORD_PATTERN})\s*[.!?,]*\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
 REVERSED_NAME_LABEL_RE = re.compile(
     rf"\b(?P<name>{NAME_WORD_PATTERN}(?:\s+[^\W\d_]\.?)?(?:\s+{NAME_WORD_PATTERN})?)\s+"
     r"is\s+(?:my\s+|the\s+)?(?P<label>first\s*name|last\s*name|lastname|surname|family\s+name|full\s+name|name)\b",
@@ -2531,13 +2538,19 @@ class PIIEngine:
                         ]
                     return [Span(reversed_match.start("name"), reversed_match.end("name"), "name", value_text)]
 
-        for pattern in (NAME_LABELLED_REPLY_RE, NAME_LABELLED_REPLY_ALT_RE, LAST_NAME_LABELLED_REPLY_SPACE_RE):
+        for pattern in (NAME_LABELLED_REPLY_RE, NAME_LABELLED_REPLY_ALT_RE, LAST_NAME_LABELLED_REPLY_SPACE_RE,
+                        CONFIRMED_EMAIL_SURNAME_REPLY_RE):
             match = pattern.match(text)
             if not match:
                 continue
 
             value = match.group("name")
             normalized = value.lower()
+            if pattern is CONFIRMED_EMAIL_SURNAME_REPLY_RE and (
+                self._is_blocked_name_token(normalized)
+                or normalized in {"unknown", "none", "null", "unavailable", "optional"}
+            ):
+                continue
             if normalized in NON_NAME_SINGLE_WORDS:
                 continue
             if normalized in NAME_PREFIX_EXCLUSIONS:
