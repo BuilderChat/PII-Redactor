@@ -36,6 +36,13 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-11-12 source): a standalone direction word after a
+last-name request receives ln before generic word/geography exclusions. This
+disambiguates surnames such as West and North, including exact-word allowlist
+collisions, without changing multiword location replies or first-name parsing.
+See `docs/DIRECTIONAL_SURNAMES.md` for validation, limits and DEV acceptance.
+Deployment has not been verified.
+
 Name parsing update (2026-11-11 source): a bounded email-confirmation plus
 surname-label reply such as `correct email last name doyon` now captures the
 surname without requiring `is`. The whole reply must match the confirmation,

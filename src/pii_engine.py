@@ -1459,6 +1459,18 @@ class PIIEngine:
     ) -> list[Span]:
         if request_type not in {"first", "last", "full"}:
             return []
+        if request_type == "last":
+            directional_answer = re.fullmatch(
+                rf"\s*(?P<name>{NAME_WORD_PATTERN})\s*[.!?]*\s*", text, flags=re.UNICODE,
+            )
+            if directional_answer and directional_answer.group("name").lower() in GEO_DIRECTION_WORDS:
+                # An explicit surname answer disambiguates West/North/etc.
+                # Pending-field inference rejects direction words, so it cannot
+                # activate this exception without a real last-name request.
+                # This narrow answer also takes precedence over an exact-word
+                # non-name allowlist entry, but not multiword place replies.
+                return [Span(directional_answer.start("name"), directional_answer.end("name"),
+                             "ln", directional_answer.group("name"))]
         apology = PROMPTED_APOLOGY_NAME_RE.fullmatch(text)
         if apology:
             # Only a complete short answer can lose an apology prefix. Reuse
