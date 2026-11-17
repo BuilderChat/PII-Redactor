@@ -15,6 +15,8 @@ RECIPIENTS = [
     "one of the salespeople",
     "anyone", "anybody", "these people", "those folks", "your salesperson",
     "the consultant", "a sales rep", "one of your agents",
+    "team", "sales team", "salesperson", "salespeople", "representative",
+    "rep", "consultant", "agent", "person", "manager",
 ]
 
 
@@ -86,3 +88,29 @@ def test_directive_words_inside_real_name_do_not_globally_block_names(verb):
         previous_assistant_message=PROMPT,
     )
     assert result.redacted_text == "My name is <fn_1> <ln_1>. Email <em_1>"
+
+
+@pytest.mark.parametrize("verb", VERBS)
+def test_bare_team_before_labelled_email_does_not_create_names(verb):
+    text = f"Yes, {verb.title()} Team email : avery@example.com "
+    vault = PIIVault()
+    result = PIIEngine(use_presidio=False, use_gliner=False).redact(text, vault, previous_assistant_message=PROMPT)
+    assert result.redacted_text == f"Yes, {verb.title()} Team email : <em_1> "
+    assert vault.items() == {"<em_1>": "avery@example.com"}
+
+
+def test_bare_team_replay_has_no_name_bindings_to_contaminate_response():
+    result = replay_transcript([
+        TranscriptTurn("assistant", "Want the team to email you more details?"),
+        TranscriptTurn("user", "Yes, Have Team email : avery@example.com"),
+    ], engine=PIIEngine(use_presidio=False, use_gliner=False))
+    assert result.user_turns[0].redacted_text == "Yes, Have Team email : <em_1>"
+    assert result.token_to_value == {"<em_1>": "avery@example.com"}
+
+
+def test_bare_team_guard_preserves_explicit_name_elsewhere():
+    result = PIIEngine(use_presidio=False, use_gliner=False).redact(
+        "Yes, Have Team email me. My name is Avery Doyon. avery@example.com", PIIVault(),
+        previous_assistant_message=PROMPT,
+    )
+    assert result.redacted_text == "Yes, Have Team email me. My name is <fn_1> <ln_1>. <em_1>"

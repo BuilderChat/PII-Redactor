@@ -1,6 +1,6 @@
 # Contact directives after acknowledgments
 
-Source updated 2026-10-29. Deployment has not been verified.
+Source updated 2026-11-17. Deployment has not been verified.
 
 The acknowledgment-plus-contact detector previously interpreted
 `sure have her text me about new homes there. 202-555-0143` as first name `have`,
@@ -14,21 +14,22 @@ the acknowledgment is followed by an optional `please`, one of `have`, `get`,
 
 - her, him, them, someone, somebody, anyone, anybody;
 - those/these guys, people or folks;
-- the/your/our/a/an team, salesperson, salespeople, representative, rep,
+- optional the/your/our/a/an followed by team, salesperson, salespeople, representative, rep,
   consultant, agent, person or manager, optionally preceded by sales;
 - one of the/your/our salespeople, representatives, reps, consultants, agents
   or team.
 
 Matching is case-insensitive with word boundaries. Existing acknowledgment
-punctuation handling remains active. The guard only rejects inferred names in
-`_detect_affirmative_name_contact_spans`. It does not suppress the message,
+punctuation handling remains active. The guard rejects inferred names in
+`_detect_affirmative_name_contact_spans`; the channel-labelled-name parser also
+reuses this pattern to reject directive-shaped name candidates. It does not suppress the message,
 blacklist those words globally, alter pending-name state, or require a name
 question for genuine volunteered names. Known scoped values, explicit personal
 introductions elsewhere in the reply, email and phone detection continue normally.
 Live redaction and transcript audit replay use the same engine.
 
 This is a bounded grammar, not a claim to understand every English directive.
-Other inference paths and already incorrect vault bindings are unchanged. It does
+Unrelated inference paths and already incorrect vault bindings are unchanged. It does
 not repair stored leads; historical cleanup needs separately reviewed evidence.
 No API, configuration, CentralApp, database or provider behavior changes are
 required. The parser adds no logging/I/O; existing request and audit
@@ -42,6 +43,15 @@ passed. New tests cover the verb/recipient matrix with phone and email, casing,
 punctuation, volunteered uppercase/lowercase/Unicode names, explicit introductions
 and known names inside directive replies, existing accepted surname words, and
 transcript replay without invented name bindings.
+
+On 2026-11-17, the missing bare-recipient case `Yes, Have Team email : ...`
+was reproduced and fixed by making the existing article/determiner optional.
+This also covers bare sales team, salesperson, salespeople, representative, rep,
+consultant, agent, person and manager after the existing directive verbs. No
+global name blacklist or response-side detector was added. All 1,027 Redactor
+tests passed, including 107 added cases for bare recipients with phone/email,
+the reported capitalized reply, explicit names elsewhere and audit replay.
+Changed-file Ruff, source security lint and source/test compilation passed.
 
 From the workspace root:
 
@@ -79,6 +89,11 @@ assert replay.token_to_value == {'<ph_1>': '202-555-0143'}
 result = engine.redact('sure Avery Doyon, text me at 202-555-0143', PIIVault(),
                        previous_assistant_message=prompt)
 assert result.redacted_text == 'sure <fn_1> <ln_1>, text me at <ph_1>'
+vault = PIIVault()
+result = engine.redact('Yes, Have Team email : avery@example.com', vault,
+                       previous_assistant_message=prompt)
+assert result.redacted_text == 'Yes, Have Team email : <em_1>'
+assert vault.items() == {'<em_1>': 'avery@example.com'}
 print('affirmative_contact_directives=passed')
 PY
 ```
@@ -88,6 +103,10 @@ consultant, receive an offer of text/email follow-up without a name question, an
 send the synthetic directive reply. Verify the phone is protected, no fn/ln
 bindings are created, and no bogus name enters the lead or assistant reply.
 Repeat with a volunteered synthetic full name to verify name capture still works.
+Also test `Yes, Have Team email : avery@example.com` in a fresh thread: only the
+email should get a token, with no Have/Team name bindings to contaminate later
+replies. Existing incorrectly populated scopes require separate remediation;
+this parser fix does not rewrite them.
 Do not log raw replacements or message bodies. The engine probe does not verify
 full widget routing or deployed prompt context.
 

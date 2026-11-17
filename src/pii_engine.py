@@ -81,7 +81,7 @@ CONTACT_DIRECTIVE_PREFIX_RE = re.compile(
     r"^\s*(?:please\s+)?(?:have|get|ask|tell|make)\s+"
     r"(?:her|him|them|someone|somebody|anyone|anybody|"
     r"(?:those|these)\s+(?:guys|people|folks)|"
-    r"(?:the|your|our|a|an)\s+(?:sales\s+)?"
+    r"(?:(?:the|your|our|a|an)\s+)?(?:sales\s+)?"
     r"(?:team|salesperson|salespeople|representative|rep|consultant|agent|person|manager)|"
     r"one\s+of\s+(?:the|your|our)\s+(?:salespeople|representatives|reps|consultants|agents|team))\b",
     re.IGNORECASE | re.UNICODE,

@@ -36,6 +36,14 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-11-17 source): the directive-recipient pattern now
+accepts bare team/salesperson/representative and related recipient forms without
+an article, preventing `Yes, Have Team email : ...` from issuing false fn/ln
+bindings. The acknowledgment and channel-wrapper parsers share this guard;
+actual personal introductions and contact channels stay protected. See
+`docs/AFFIRMATIVE_CONTACT_DIRECTIVES.md` for coverage and DEV checks. No
+response-side monitoring or deployment was performed.
+
 Name parsing update (2026-11-12 source): a standalone direction word after a
 last-name request receives ln before generic word/geography exclusions. This
 disambiguates surnames such as West and North, including exact-word allowlist
