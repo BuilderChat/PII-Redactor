@@ -36,6 +36,13 @@ label. Live redaction and transcript replay share this behavior without an API o
 CentralApp change. See `docs/BUSINESS_REPLY_CONTEXT.md` for limits, regression
 coverage, and DEV acceptance steps; this does not establish server deployment.
 
+Name parsing update (2026-11-18 source): prompted first-name/surname assertions
+accept a whitespace-only connector, e.g. `Avery last name is shareef`. The older
+name-before-label parser defers when the label continues with `is`, preventing
+an incorrect surname binding on the leading first name. Bare reversed shorthand
+remains supported. See `docs/PROMPTED_NAME_SURNAME_ASSERTIONS.md` for tests,
+limits and DEV checks. No deployment has been verified.
+
 Name parsing update (2026-11-17 source): the directive-recipient pattern now
 accepts bare team/salesperson/representative and related recipient forms without
 an article, preventing `Yes, Have Team email : ...` from issuing false fn/ln

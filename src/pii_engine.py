@@ -1430,7 +1430,7 @@ class PIIEngine:
         if not surname_match:
             return None
         connector = working_text[first_match.end(1):surname_match.start()]
-        if not re.fullmatch(r"\s*(?:[,;]\s*(?:and\s+)?|and\s+)(?:my\s+)?", connector, re.IGNORECASE):
+        if not re.fullmatch(r"(?:\s+|\s*(?:[,;]\s*(?:and\s+)?|and\s+))(?:my\s+)?", connector, re.IGNORECASE):
             return None
         labelled_spans = self._detect_name_labelled_reply_spans(working_text, non_name_terms)
         surname = next((
@@ -2554,6 +2554,11 @@ class PIIEngine:
                         CONFIRMED_EMAIL_SURNAME_REPLY_RE):
             match = pattern.match(text)
             if not match:
+                continue
+            if pattern is NAME_LABELLED_REPLY_RE and re.match(r"\s+is\b", text[match.end():], re.IGNORECASE):
+                # 'Avery last name is Doyon' asserts Doyon, not Avery, as ln.
+                # Leave the explicit assertion to inline parsing below; preserve
+                # the older reversed shorthand 'Doyon last name'.
                 continue
 
             value = match.group("name")

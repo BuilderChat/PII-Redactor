@@ -14,6 +14,9 @@ from src.transcript_replay import TranscriptTurn, replay_transcript
     "answer,expected,first,last",
     [
         ("Victor and last name is Doyon", "<fn_1> and last name is <ln_1>", "Victor", "Doyon"),
+        ("Victor last name is doyon", "<fn_1> last name is <ln_1>", "Victor", "doyon"),
+        ("victor my last name is doyon", "<fn_1> my last name is <ln_1>", "victor", "doyon"),
+        ("Élodie surname is O’Neil", "<fn_1> surname is <ln_1>", "Élodie", "O’Neil"),
         ("Victor, last name is Doyon", "<fn_1>, last name is <ln_1>", "Victor", "Doyon"),
         ("Victor and my last name is Doyon", "<fn_1> and my last name is <ln_1>", "Victor", "Doyon"),
         ("victor; my surname is doyon.", "<fn_1>; my surname is <ln_1>.", "victor", "doyon"),
@@ -114,3 +117,44 @@ def test_last_name_question_preserves_surnames_and_non_name_prose(answer, expect
     )
     assert result.redacted_text == expected
     assert result.replacements == {"<ln_1>": "Doyon"}
+
+
+@pytest.mark.parametrize("label", ["last name", "surname", "family name"])
+def test_reversed_bare_label_reply_still_captures_surname(label):
+    result = PIIEngine(use_presidio=False, use_gliner=False).redact(f"Doyon {label}", PIIVault())
+    assert result.redacted_text == f"<ln_1> {label}"
+    assert result.replacements == {"<ln_1>": "Doyon"}
+
+
+@pytest.mark.parametrize("leading", ["Please", "No", "General Manager", "Windsor"])
+def test_whitespace_assertion_does_not_turn_non_name_prefix_into_person(leading):
+    text = leading + " last name is doyon"
+    result = PIIEngine(use_presidio=False, use_gliner=False).redact(
+        text, PIIVault(), previous_assistant_message="What's your first name?",
+        non_name_allowlist=["Windsor"],
+    )
+    assert result.redacted_text == leading + " last name is <ln_1>"
+    assert result.replacements == {"<ln_1>": "doyon"}
+
+
+def test_whitespace_assertion_does_not_infer_first_name_without_name_question():
+    result = PIIEngine(use_presidio=False, use_gliner=False).redact(
+        "Victor last name is doyon", PIIVault(), previous_assistant_message="What's your role?",
+    )
+    assert result.redacted_text == "Victor last name is <ln_1>"
+    assert result.replacements == {"<ln_1>": "doyon"}
+
+
+def test_reported_whitespace_reply_keeps_first_name_binding_on_repeat():
+    result = replay_transcript([
+        TranscriptTurn("assistant", "What first name should the team use when they reach out with pricing?"),
+        TranscriptTurn("user", "Avery last name is shareef"),
+        TranscriptTurn("assistant", "What should I call you?"),
+        TranscriptTurn("user", "Avery"),
+        TranscriptTurn("assistant", "What is your first name?"),
+        TranscriptTurn("user", "First name is Avery"),
+    ], engine=PIIEngine(use_presidio=False, use_gliner=False))
+    assert result.user_turns[0].redacted_text == "<fn_1> last name is <ln_1>"
+    assert result.user_turns[1].redacted_text == "<fn_1>"
+    assert result.user_turns[2].redacted_text == "First name is <fn_1>"
+    assert result.token_to_value == {"<fn_1>": "Avery", "<ln_1>": "shareef"}

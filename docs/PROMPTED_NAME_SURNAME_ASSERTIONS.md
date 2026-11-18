@@ -1,15 +1,23 @@
 # First-name replies with surname assertions
 
-Source change: 2026-10-21. Server deployment has not been verified.
+Source updated 2026-11-18. Server deployment has not been verified.
 
 After a first/full/last-name request, `Victor and last name is Doyon` now becomes
 `<fn_1> and last name is <ln_1>`. Previously the leading first name stayed raw,
 including during transcript audit replay. The prompted parser now accepts a
-leading name candidate followed immediately by `and`, a comma, or a semicolon,
+leading name candidate followed immediately by whitespace, `and`, a comma, or a semicolon,
 optional `my`, and an independently accepted `last name is`, `surname is`, or
 `family name is` assertion. Existing non-name filters and runtime allowlists
 still apply. This does not generally accept arbitrary sentence starters, or
 infer a bare first name from this shape without a name request.
+
+The whitespace-only connector was added on 2026-11-18 for replies such as
+`Avery last name is shareef`. The older name-before-label detector now skips its
+match when the label continues with `is`, allowing inline parsing to capture
+the explicit surname value instead. This prevents an overlapping incorrect ln
+binding for Avery. Bare reversed shorthand such as `Doyon last name` remains
+supported. Without a name question, the explicit surname is still protected but
+the leading unlabelled word is not inferred as a first name by this helper.
 
 Separately, keyed name values stop before the next name label rather than
 consuming `and last` as part of the preceding value. This keeps
@@ -54,6 +62,13 @@ Ruff on changed Python files and source/test compilation passed.
 CentralApp full CI was not run because no CentralApp files changed. No deployment
 or live widget/provider check was performed.
 
+On 2026-11-18 all 1,045 Redactor tests passed, including 18 new cases for
+whitespace-only assertions, optional my, Unicode names, reversed-label shorthand,
+blocked/prose/community prefixes, non-name context and repeated-name replay.
+Changed-file Ruff, source security lint with existing exclusions, and source/test
+compilation passed. No CentralApp source or runtime contract changed; CentralApp
+full CI and live database/provider checks were not run. Nothing was deployed.
+
 ## DEV acceptance and rollback
 
 After an operator deploys the reviewed Redactor image through Infra, run this
@@ -83,6 +98,17 @@ assert result.redacted_text == '<ln_1>, last name is <ln_1>'
 result = engine.redact('General Manager', PIIVault(),
                        previous_assistant_message="What's your role there?")
 assert result.redacted_text == 'General Manager'
+prompt = 'What first name should the team use when they reach out with pricing?'
+replay = replay_transcript([
+    TranscriptTurn('assistant', prompt),
+    TranscriptTurn('user', 'Avery last name is shareef'),
+    TranscriptTurn('assistant', 'What should I call you?'),
+    TranscriptTurn('user', 'Avery'),
+], engine=engine)
+assert replay.user_turns[0].redacted_text == '<fn_1> last name is <ln_1>'
+assert replay.user_turns[1].redacted_text == '<fn_1>'
+assert replay.token_to_value == {'<fn_1>': 'Avery', '<ln_1>': 'shareef'}
+assert engine.redact('Doyon last name', PIIVault()).redacted_text == '<ln_1> last name'
 print('prompted_name_surname_assertions=passed')
 PY
 ```
@@ -90,8 +116,12 @@ PY
 Then use a fresh DEV widget thread with provider-send gates intact: supply a
 synthetic email, answer the first-name question with the composite reply, and
 verify fn/ln tokens, both captured lead fields, and finalization. Repeat with
-both fields explicitly labelled. Also capture the first name, wait for a
-last-name-only question, and supply the composite reply again; verify no extra
+both fields explicitly labelled. In a fresh
+thread, reproduce `Avery last name is shareef` after the reported first-name
+question; a repeated Avery must reuse fn, not ln. Then try the explicit
+`First name is Avery` clarification and verify no additional name bindings.
+Also capture the first name, wait for a last-name-only question, and supply
+the whitespace-only composite reply again; verify no extra
 surname binding is created for the known first name. This widget check establishes request-context
 propagation that the image probe alone cannot verify. Do not log replacement
 maps or raw messages. Historical lead correction requires separate review.
